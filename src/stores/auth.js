@@ -68,6 +68,10 @@ export const useAuthStore = defineStore("auth", {
       this.me = null;
     },
 
+    async changePassword(payload) {
+      return http.post("/auth/change-password", payload);
+    },
+
     async requestPasswordReset(identifier) {
       return http.post("/auth/forgot-password", { identifier });
     },

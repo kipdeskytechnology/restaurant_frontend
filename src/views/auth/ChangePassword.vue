@@ -2,11 +2,12 @@
 <script setup>
 import { ref } from "vue";
 import { useToast } from "vue-toastification";
-import { changePassword } from "../../stores/auth";
+import { useAuthStore } from "../../stores/auth";
 import { useRouter } from "vue-router";
 
 const toast = useToast();
 const router = useRouter();
+const auth = useAuthStore();
 
 const saving = ref(false);
 const showPw = ref(false);
@@ -21,7 +22,7 @@ async function submit() {
 
   saving.value = true;
   try {
-    await changePassword(form.value);
+    await auth.changePassword(form.value);
     toast.success("Password changed successfully. Welcome!");
     router.replace({ name: "dashboard" });
   } catch (e) {
@@ -31,6 +32,7 @@ async function submit() {
   }
 }
 </script>
+
 
 <template>
   <div class="min-vh-100 d-flex align-items-center justify-content-center px-3 auth-bg">
