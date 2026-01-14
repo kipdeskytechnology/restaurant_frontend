@@ -3,6 +3,8 @@
 import { ref, onMounted, computed, nextTick } from "vue";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
 import { useToast } from "vue-toastification";
+import SearchSelect from "../../components/SearchSelect.vue";
+
 import {
   listCashDrawers,
   createCashDrawer,
@@ -10,14 +12,19 @@ import {
   toggleCashDrawer,
 } from "../../api/cash";
 
+import { listOutlets } from "../../api/systemOutlets";
+
 const toast = useToast();
 const loading = ref(true);
 const saving = ref(false);
 
 const drawers = ref([]);
 
+// Outlets
+const outlets = ref([]);
+
 // Filters
-const outletId = ref(""); // can auto-fill from auth store later if you want
+const outletId = ref(null); // null = all
 const active = ref("1"); // 1|0|all
 
 // Optional quick search in table
@@ -31,18 +38,39 @@ const editId = ref(null);
 const triedSubmit = ref(false);
 
 const form = ref({
-  outlet_id: "",
+  outlet_id: null,
   name: "",
   is_active: true,
 });
 
 const isEditMode = computed(() => !!editId.value);
 
+// Outlet options for SearchSelect
+const outletOptions = computed(() =>
+  (outlets.value || []).map((o) => ({
+    label: o.name ?? `Outlet #${o.id}`,
+    value: o.id,
+  }))
+);
+
+// Map outlet_id -> outlet_name (for table + search)
+const outletNameById = computed(() => {
+  const m = new Map();
+  for (const o of outlets.value || []) m.set(Number(o.id), o.name ?? `Outlet #${o.id}`);
+  return m;
+});
+
+const outletLabel = (id) => {
+  const n = outletNameById.value.get(Number(id));
+  return n || (id ? `Outlet #${id}` : "");
+};
+
 const filteredDrawers = computed(() => {
   const qq = q.value.trim().toLowerCase();
   if (!qq) return drawers.value || [];
   return (drawers.value || []).filter((d) => {
-    const hay = `${d.outlet_id} ${d.name || ""}`.toLowerCase();
+    const outletText = outletLabel(d.outlet_id);
+    const hay = `${outletText} ${d.name || ""}`.toLowerCase();
     return hay.includes(qq);
   });
 });
@@ -51,7 +79,7 @@ function resetForm() {
   editId.value = null;
   triedSubmit.value = false;
   form.value = {
-    outlet_id: outletId.value || "",
+    outlet_id: outletId.value ?? null,
     name: "",
     is_active: true,
   };
@@ -61,7 +89,7 @@ function setFormFromDrawer(d) {
   editId.value = d.id;
   triedSubmit.value = false;
   form.value = {
-    outlet_id: d.outlet_id,
+    outlet_id: Number(d.outlet_id) || null,
     name: d.name || "",
     is_active: !!d.is_active,
   };
@@ -98,11 +126,20 @@ function closeModal() {
   modalInstance?.hide();
 }
 
+async function loadOutlets() {
+  try {
+    outlets.value = await listOutlets();
+  } catch (e) {
+    toast.error(e?.response?.data?.detail || "Failed to load outlets");
+    outlets.value = [];
+  }
+}
+
 async function load() {
   loading.value = true;
   try {
     drawers.value = await listCashDrawers({
-      outlet_id: outletId.value || undefined,
+      outlet_id: outletId.value ?? undefined, // null => no filter
       active: active.value,
     });
   } catch (e) {
@@ -117,7 +154,7 @@ function validate() {
 
   const out = Number(form.value.outlet_id);
   if (!out) {
-    toast.error("Outlet ID is required");
+    toast.error("Outlet is required");
     return false;
   }
   if (!String(form.value.name || "").trim()) {
@@ -167,13 +204,14 @@ async function toggle(d) {
 }
 
 function clearFilters() {
-  outletId.value = "";
+  outletId.value = null;
   active.value = "1";
   q.value = "";
 }
 
 onMounted(async () => {
   resetForm();
+  await loadOutlets(); // ✅ load outlet names first
   await load();
 });
 </script>
@@ -202,12 +240,18 @@ onMounted(async () => {
     <div v-else class="row" style="zoom: 80%;">
       <!-- Filters card -->
       <div class="col-12">
-        <div class="card drawer-card mb-3">
+        <div class="card drawer-card mb-3 overflow-visible">
           <div class="card-body p-2">
             <div class="row g-2 align-items-end">
               <div class="col-md-3">
-                <label class="form-label">Outlet ID</label>
-                <input v-model="outletId" class="form-control" placeholder="e.g. 1" />
+                <label class="form-label">Outlet</label>
+                <SearchSelect
+                  v-model="outletId"
+                  :options="outletOptions"
+                  placeholder="All outlets"
+                  :nullLabel="'All outlets'"
+                  :clearable="true"
+                />
               </div>
 
               <div class="col-md-2">
@@ -223,12 +267,12 @@ onMounted(async () => {
                 <label class="form-label">Quick Search</label>
                 <div class="input-group">
                   <span class="input-group-text bg-light"><i class="ri-search-line"></i></span>
-                  <input v-model="q" class="form-control" placeholder="Search by name or outlet..." />
+                  <input v-model="q" class="form-control" placeholder="Search by drawer or outlet..." />
                 </div>
               </div>
 
               <div class="col-md-3 d-flex gap-2">
-                <button class="btn btn-outline-primary w-100" :disabled="loading" @click="load">
+                <button class="btn btn-primary w-100" :disabled="loading" @click="load">
                   <i class="ri-refresh-line me-1"></i> Load
                 </button>
                 <button class="btn btn-light w-100" :disabled="loading" @click="clearFilters">
@@ -254,7 +298,7 @@ onMounted(async () => {
               <table class="table table-sm table-centered table-bordered mb-0">
                 <thead class="bg-light">
                   <tr>
-                    <th style="width: 120px;">Outlet</th>
+                    <th style="width: 220px;">Outlet</th>
                     <th>Name</th>
                     <th style="width: 140px;">Status</th>
                     <th class="text-end" style="width: 240px;">Actions</th>
@@ -263,7 +307,7 @@ onMounted(async () => {
 
                 <tbody>
                   <tr v-for="d in filteredDrawers" :key="d.id">
-                    <td>{{ d.outlet_id }}</td>
+                    <td class="fw-semibold">{{ outletLabel(d.outlet_id) }}</td>
                     <td class="fw-semibold">{{ d.name }}</td>
                     <td>
                       <span class="badge" :class="d.is_active ? 'bg-success' : 'bg-secondary'">
@@ -319,19 +363,21 @@ onMounted(async () => {
           <div class="modal-body">
             <form @submit.prevent="save" novalidate :class="{ 'was-validated': triedSubmit }">
               <div class="row g-2">
-                <div class="col-md-4">
-                  <label class="form-label">Outlet ID *</label>
-                  <input
+                <div class="col-md-5">
+                  <label class="form-label">Outlet *</label>
+                  <SearchSelect
                     v-model="form.outlet_id"
-                    class="form-control"
-                    placeholder="e.g. 1"
+                    :options="outletOptions"
+                    placeholder="Select outlet…"
+                    :clearable="true"
                     :disabled="isEditMode"
-                    required
                   />
-                  <div class="invalid-feedback">Outlet ID is required.</div>
+                  <div v-if="triedSubmit && !form.outlet_id" class="invalid-feedback d-block">
+                    Outlet is required.
+                  </div>
                 </div>
 
-                <div class="col-md-8">
+                <div class="col-md-7">
                   <label class="form-label">Name *</label>
                   <input
                     v-model="form.name"
@@ -379,7 +425,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* Theme-safe card + modal polish (matches your Users.vue approach) */
 .drawer-card {
   background: var(--ct-secondary-bg);
   border: 1px solid var(--ct-border-color-translucent);
@@ -388,19 +433,16 @@ onMounted(async () => {
   box-shadow: var(--ct-box-shadow-sm);
 }
 
-/* Make table header follow theme (bootstrap puts bg-light = light always) */
 .table thead.bg-light th {
   background: var(--ct-tertiary-bg) !important;
   color: var(--ct-emphasis-color) !important;
 }
 
-/* Modal surface */
 .drawer-modal {
   background: var(--ct-secondary-bg);
   border: 1px solid var(--ct-border-color-translucent);
 }
 
-/* Overlay theme-safe */
 .drawer-overlay {
   position: absolute;
   inset: 0;
@@ -410,5 +452,9 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.overflow-visible {
+  overflow: visible !important;
 }
 </style>

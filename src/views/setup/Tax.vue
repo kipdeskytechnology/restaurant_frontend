@@ -349,7 +349,7 @@ onMounted(load);
                   <span v-if="savingRate">Saving...</span>
                   <span v-else>{{ isEditRate ? "Update Rate" : "Create Rate" }}</span>
                 </button>
-                <button class="btn btn-outline-secondary" :disabled="savingRate" @click="resetRateForm">
+                <button class="btn btn-secondary" :disabled="savingRate" @click="resetRateForm">
                   Clear
                 </button>
               </div>
@@ -506,7 +506,7 @@ onMounted(load);
                   <span v-if="savingProfile">Saving...</span>
                   <span v-else>{{ isEditProfile ? "Update Profile" : "Create Profile" }}</span>
                 </button>
-                <button class="btn btn-outline-secondary" :disabled="savingProfile" @click="resetProfileForm">
+                <button class="btn btn-secondary" :disabled="savingProfile" @click="resetProfileForm">
                   Clear
                 </button>
               </div>

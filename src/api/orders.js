@@ -22,8 +22,8 @@ export const reopenOrder = (orderId) =>
 export const cancelOrder = (orderId) =>
   http.post(`${base}/orders/${orderId}/cancel`).then((r) => r.data);
 
-export const payOrder = (orderId) =>
-  http.post(`${base}/orders/${orderId}/pay`).then((r) => r.data);
+export const payOrder = (orderId, payload = null) =>
+  http.post(`${base}/orders/${orderId}/pay`, payload).then((r) => r.data);
 
 // Lines
 export const addOrderLine = (orderId, payload) =>

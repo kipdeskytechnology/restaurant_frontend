@@ -270,7 +270,7 @@ onMounted(load);
                 <span v-if="uomSaving">Saving...</span>
                 <span v-else>{{ isEditUom ? "Update UOM" : "Create UOM" }}</span>
               </button>
-              <button class="btn btn-outline-secondary" :disabled="uomSaving" @click="resetUomForm">
+              <button class="btn btn-secondary" :disabled="uomSaving" @click="resetUomForm">
                 Clear
               </button>
             </div>
@@ -402,7 +402,7 @@ onMounted(load);
                 <span v-if="convSaving">Saving...</span>
                 <span v-else>{{ isEditConv ? "Update Conversion" : "Create Conversion" }}</span>
               </button>
-              <button class="btn btn-outline-secondary" :disabled="convSaving" @click="resetConvForm">
+              <button class="btn btn-secondary" :disabled="convSaving" @click="resetConvForm">
                 Clear
               </button>
             </div>

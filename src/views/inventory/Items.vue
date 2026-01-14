@@ -217,7 +217,7 @@ onMounted(loadAll);
           </div>
 
           <div class="col-md-1 d-grid">
-            <button class="btn btn-outline-secondary" @click="loadItems">Go</button>
+            <button class="btn btn-secondary" @click="loadItems">Go</button>
           </div>
         </div>
       </div>
@@ -283,7 +283,7 @@ onMounted(loadAll);
     <div class="modal fade" id="inventoryItemModal" tabindex="-1" role="dialog" aria-hidden="true" style="zoom: 80%;">
       <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content">
-          <div class="modal-header">
+          <div class="modal-header bg-light">
             <h4 class="modal-title">
               {{ editing ? "Edit Inventory Item" : "Add Inventory Item" }}
             </h4>

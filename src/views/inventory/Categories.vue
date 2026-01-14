@@ -145,7 +145,7 @@ onMounted(load);
                 <td class="text-end">
                   <button
                     type="button"
-                    class="btn btn-sm btn-outline-secondary me-2"
+                    class="btn btn-sm btn-secondary me-2"
                     data-bs-toggle="modal"
                     data-bs-target="#inventoryCategoryModal"
                     @click="prepareEdit(c)"
@@ -153,7 +153,7 @@ onMounted(load);
                     Edit
                   </button>
 
-                  <button type="button" class="btn btn-sm btn-outline-danger" @click="remove(c)">
+                  <button type="button" class="btn btn-sm btn-danger" @click="remove(c)">
                     Delete
                   </button>
                 </td>
@@ -169,10 +169,10 @@ onMounted(load);
     </div>
 
     <!-- Bootstrap Center Modal -->
-    <div class="modal fade" id="inventoryCategoryModal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal fade" id="inventoryCategoryModal" tabindex="-1" role="dialog" aria-hidden="true" style="zoom: 80%;">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
-          <div class="modal-header">
+          <div class="modal-header bg-light">
             <h4 class="modal-title">
               {{ editing ? "Edit Category" : "Add Category" }}
             </h4>

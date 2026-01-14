@@ -251,7 +251,7 @@ onMounted(load);
                 placeholder="Search by name, code, phone, or email (press Enter)"
                 @keyup.enter="load"
               />
-              <button class="btn btn-outline-secondary" :disabled="loading" @click="load">
+              <button class="btn btn-secondary" :disabled="loading" @click="load">
                 <span v-if="loading">Searching...</span>
                 <span v-else>Search</span>
               </button>
@@ -269,7 +269,7 @@ onMounted(load);
 
           <div class="col-md-3 d-flex gap-2">
             <button class="btn btn-light w-100" :disabled="loading" @click="clearSearch">Clear</button>
-            <button class="btn btn-outline-primary w-100" :disabled="loading" @click="load">Refresh</button>
+            <button class="btn btn-primary w-100" :disabled="loading" @click="load">Refresh</button>
           </div>
         </div>
       </div>
@@ -413,7 +413,6 @@ onMounted(load);
                     placeholder="Optional (e.g. CUST001)"
                     autocomplete="off"
                   />
-                  <small class="text-muted">If blank, backend can auto-generate (if supported).</small>
                 </div>
 
                 <div class="col-md-8">

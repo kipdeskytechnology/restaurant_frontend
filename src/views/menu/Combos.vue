@@ -363,7 +363,7 @@ onMounted(loadAll);
       </div>
 
       <div class="d-flex gap-2">
-        <button class="btn btn-outline-primary" :disabled="loading" @click="applyFilter">
+        <button class="btn btn-primary" :disabled="loading" @click="applyFilter">
           <i class="ri-refresh-line me-1"></i> Refresh
         </button>
         <button class="btn btn-primary" @click="openCreate">
@@ -386,7 +386,7 @@ onMounted(loadAll);
                 placeholder="Search combo name, SKU, description…"
                 @keyup.enter="applyFilter"
               />
-              <button class="btn btn-outline-secondary" :disabled="loading" @click="applyFilter">
+              <button class="btn btn-secondary" :disabled="loading" @click="applyFilter">
                 <span v-if="loading">Searching…</span>
                 <span v-else>Search</span>
               </button>
@@ -492,7 +492,7 @@ onMounted(loadAll);
           </div>
 
           <div class="combo-actions" @click.stop>
-            <button class="btn btn-sm btn-outline-info" @click="openComponents(c)">
+            <button class="btn btn-sm btn-info" @click="openComponents(c)">
               <i class="ri-list-check-2 me-1"></i> Components
             </button>
 
