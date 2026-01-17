@@ -288,7 +288,7 @@ onMounted(loadAll);
     </div>
 
     <!-- Filters -->
-    <div class="card mb-3" style="zoom: 80%;">
+    <div class="card mb-3">
       <div class="card-body">
         <div class="row g-2 align-items-end">
           <div class="col-md-5">
@@ -311,7 +311,7 @@ onMounted(loadAll);
     <div v-if="loading" class="card"><div class="card-body">Loading...</div></div>
 
     <!-- Table -->
-    <div v-else class="card" style="zoom: 80%;">
+    <div v-else class="card">
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-sm table-bordered align-middle mb-0">
