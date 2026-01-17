@@ -304,7 +304,6 @@ onMounted(loadAll);
             <input v-model="filters.item_q" class="form-control" placeholder="Type item name or SKU..." />
           </div>
         </div>
-        <small class="text-muted d-block mt-2">Items list updates automatically as you type.</small>
       </div>
     </div>
 

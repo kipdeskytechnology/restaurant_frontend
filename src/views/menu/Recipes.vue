@@ -1,6 +1,6 @@
 <!-- src/views/menu/Recipes.vue -->
 <script setup>
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
 import { useToast } from "vue-toastification";
 import SearchSelect from "../../components/SearchSelect.vue";
@@ -20,6 +20,7 @@ const toast = useToast();
 
 const loading = ref(false);
 const saving = ref(false);
+const checking = ref(false);
 
 const menuItems = ref([]);
 const uoms = ref([]);
@@ -31,7 +32,14 @@ const recipe = ref(null);
 // snapshots for dirty-check
 const savedSnapshot = ref("");
 
-// add line draft
+// LEFT filters (menu list)
+const menuSearch = ref("");
+const recipeFilter = ref("all"); // all | yes | no
+
+// status map: { [menuId]: { has_recipe: bool, lines_count: number, checked: bool } }
+const recipeStatusByMenuId = ref({});
+
+// add line draft (UOM will be preloaded)
 const newLine = ref({
   inventory_item_id: null,
   qty: "",
@@ -39,12 +47,6 @@ const newLine = ref({
 });
 
 // ---------- lookups ----------
-const menuItemOptions = computed(() =>
-  (menuItems.value || [])
-    .map((it) => ({ label: it.name, value: it.id }))
-    .sort((a, b) => a.label.localeCompare(b.label))
-);
-
 const inventoryOptions = computed(() =>
   (inventoryItems.value || [])
     .map((inv) => ({
@@ -68,25 +70,21 @@ const invNameById = computed(() => {
       x.name || x.code || `Item #${x.id}`,
     ])
   );
-  return (id) => m.get(id) || `Item #${id}`;
+  return (id) => m.get(Number(id)) || `Item #${id}`;
 });
 
 const uomCodeById = computed(() => {
   const m = new Map((uoms.value || []).map((u) => [u.id, u.code]));
-  return (id) => m.get(id) || "";
+  return (id) => m.get(Number(id)) || "";
+});
+
+const uomNameById = computed(() => {
+  const m = new Map((uoms.value || []).map((u) => [u.id, u.name]));
+  return (id) => m.get(Number(id)) || "";
 });
 
 // ---------- recipe state ----------
 const lines = computed(() => recipe.value?.lines || []);
-
-const meta = computed(() => {
-  const l = lines.value || [];
-  const unique = new Set(l.map((x) => Number(x.inventory_item_id))).size;
-  return {
-    total: l.length,
-    unique,
-  };
-});
 
 const payloadSnapshot = computed(() => {
   if (!recipe.value) return "";
@@ -106,7 +104,6 @@ const isDirty = computed(() => {
 const canSave = computed(() => {
   if (!recipe.value) return false;
   if (saving.value) return false;
-  // basic validity: all qty > 0, has inv and uom
   return (recipe.value.lines || []).every((l) => {
     const invId = Number(l.inventory_item_id || 0);
     const uomId = Number(l.uom_id || 0);
@@ -115,45 +112,141 @@ const canSave = computed(() => {
   });
 });
 
-// ---------- actions ----------
-async function loadLookups() {
-  menuItems.value = await listMenuItems({ limit: 500, available: "all" });
-  uoms.value = await listUoms();
-  inventoryItems.value = await listInventoryItems();
+const meta = computed(() => {
+  const l = lines.value || [];
+  const unique = new Set(l.map((x) => Number(x.inventory_item_id))).size;
+  return { total: l.length, unique };
+});
+
+// ---------- menu list ----------
+function statusFor(menuId) {
+  return (
+    recipeStatusByMenuId.value[menuId] || {
+      has_recipe: false,
+      lines_count: 0,
+      checked: false,
+    }
+  );
+}
+
+const filteredMenuItems = computed(() => {
+  const q = menuSearch.value.trim().toLowerCase();
+  let arr = menuItems.value || [];
+
+  if (q) arr = arr.filter((m) => (m.name || "").toLowerCase().includes(q));
+
+  if (recipeFilter.value === "yes") {
+    arr = arr.filter((m) => statusFor(m.id).checked && statusFor(m.id).has_recipe);
+  } else if (recipeFilter.value === "no") {
+    arr = arr.filter((m) => statusFor(m.id).checked && !statusFor(m.id).has_recipe);
+  }
+
+  return arr;
+});
+
+const selectedMenuItemName = computed(() => {
+  const id = Number(selectedMenuItemId.value || 0);
+  return menuItems.value.find((m) => Number(m.id) === id)?.name || (id ? `#${id}` : "");
+});
+
+// ---------- helpers ----------
+function defaultUomId() {
+  return uoms.value?.[0]?.id || null;
+}
+
+function ensureLineUom(line) {
+  const id = Number(line?.uom_id || 0);
+  if (id) return;
+  const def = defaultUomId();
+  if (def) line.uom_id = def;
+}
+
+function normalizeLoadedRecipeUoms() {
+  if (!recipe.value) return;
+  recipe.value.lines = recipe.value.lines || [];
+  for (const l of recipe.value.lines) ensureLineUom(l);
 }
 
 function resetNewLine() {
-  newLine.value = { inventory_item_id: null, qty: "", uom_id: null };
+  newLine.value = { inventory_item_id: null, qty: "", uom_id: defaultUomId() };
 }
 
 function setSnapshot() {
   savedSnapshot.value = payloadSnapshot.value || "";
 }
 
-async function loadRecipeForMenuItem() {
-  if (!selectedMenuItemId.value) {
-    recipe.value = null;
-    savedSnapshot.value = "";
-    resetNewLine();
-    return;
-  }
+// ---------- actions ----------
+async function loadLookups() {
+  menuItems.value = await listMenuItems({ limit: 500, available: "all" });
+  uoms.value = await listUoms();
+  inventoryItems.value = await listInventoryItems();
 
+  // preload default UOM like Stock view
+  if (!newLine.value.uom_id) newLine.value.uom_id = defaultUomId();
+}
+
+async function ensureRecipeForMenuItem(menuId) {
   loading.value = true;
   try {
-    const r = await getRecipeByMenuItem(Number(selectedMenuItemId.value));
+    const r = await getRecipeByMenuItem(Number(menuId));
     if (r) {
       recipe.value = r;
+      selectedMenuItemId.value = Number(menuId);
+
+      // preload UOM on lines if missing (still changeable)
+      normalizeLoadedRecipeUoms();
+
       setSnapshot();
+
+      recipeStatusByMenuId.value[Number(menuId)] = {
+        has_recipe: (recipe.value.lines || []).length > 0,
+        lines_count: (recipe.value.lines || []).length,
+        checked: true,
+      };
       return;
     }
 
-    recipe.value = await createRecipe({ menu_item_id: Number(selectedMenuItemId.value) });
+    recipe.value = await createRecipe({ menu_item_id: Number(menuId) });
+    selectedMenuItemId.value = Number(menuId);
+
+    recipe.value.lines = recipe.value.lines || [];
+    normalizeLoadedRecipeUoms();
+
     toast.success("Recipe created (empty)");
     setSnapshot();
+
+    recipeStatusByMenuId.value[Number(menuId)] = {
+      has_recipe: false,
+      lines_count: 0,
+      checked: true,
+    };
   } catch (e) {
-    toast.error(e?.response?.data?.detail || "Failed to load recipe");
+    toast.error(e?.response?.data?.detail || "Failed to load/create recipe");
   } finally {
     loading.value = false;
+  }
+}
+
+async function refreshRecipeStatuses() {
+  checking.value = true;
+  const state = { ...recipeStatusByMenuId.value };
+  try {
+    for (const m of menuItems.value || []) {
+      try {
+        const r = await getRecipeByMenuItem(Number(m.id));
+        const linesCount = r ? (r.lines || []).length : 0;
+        state[m.id] = {
+          has_recipe: !!r && linesCount > 0,
+          lines_count: linesCount,
+          checked: true,
+        };
+      } catch {
+        state[m.id] = { has_recipe: false, lines_count: 0, checked: true };
+      }
+    }
+    recipeStatusByMenuId.value = state;
+  } finally {
+    checking.value = false;
   }
 }
 
@@ -168,18 +261,16 @@ function addLineLocal() {
   if (!uomId) return toast.error("Pick a UOM");
   if (!qty || qty <= 0) return toast.error("Qty must be > 0");
 
-  const exists = (recipe.value.lines || []).some(
-    (l) => Number(l.inventory_item_id) === invId
-  );
+  const exists = (recipe.value.lines || []).some((l) => Number(l.inventory_item_id) === invId);
   if (exists) return toast.error("This ingredient already exists (edit it instead)");
 
   recipe.value.lines = recipe.value.lines || [];
   recipe.value.lines.unshift({
-    id: 0, // local only
+    id: 0,
     recipe_id: recipe.value.id,
     inventory_item_id: invId,
     qty,
-    uom_id: uomId,
+    uom_id: uomId, // preloaded but changeable
   });
 
   resetNewLine();
@@ -208,24 +299,6 @@ async function removeLineServer(line) {
   }
 }
 
-function moveUp(idx) {
-  if (!recipe.value) return;
-  if (idx <= 0) return;
-  const arr = recipe.value.lines;
-  const tmp = arr[idx - 1];
-  arr[idx - 1] = arr[idx];
-  arr[idx] = tmp;
-}
-
-function moveDown(idx) {
-  if (!recipe.value) return;
-  const arr = recipe.value.lines;
-  if (idx >= arr.length - 1) return;
-  const tmp = arr[idx + 1];
-  arr[idx + 1] = arr[idx];
-  arr[idx] = tmp;
-}
-
 async function saveAllLines() {
   if (!recipe.value) return;
   if (!canSave.value) return toast.error("Fix invalid lines before saving.");
@@ -241,8 +314,19 @@ async function saveAllLines() {
   saving.value = true;
   try {
     recipe.value = await replaceRecipeLines(recipe.value.id, payload);
+
+    // if server returns any missing uoms, fill defaults (still changeable)
+    normalizeLoadedRecipeUoms();
+
     toast.success("Recipe saved");
     setSnapshot();
+
+    const mid = Number(selectedMenuItemId.value);
+    recipeStatusByMenuId.value[mid] = {
+      has_recipe: (recipe.value.lines || []).length > 0,
+      lines_count: (recipe.value.lines || []).length,
+      checked: true,
+    };
   } catch (e) {
     toast.error(e?.response?.data?.detail || "Failed to save recipe");
   } finally {
@@ -251,30 +335,32 @@ async function saveAllLines() {
 }
 
 async function discardChanges() {
-  if (!recipe.value) return;
-  if (!isDirty.value) return;
-
+  if (!recipe.value || !isDirty.value) return;
   if (!confirm("Discard unsaved changes?")) return;
-  await loadRecipeForMenuItem();
-}
-
-function clearSelection() {
-  selectedMenuItemId.value = null;
-  recipe.value = null;
-  savedSnapshot.value = "";
-  resetNewLine();
+  await ensureRecipeForMenuItem(Number(selectedMenuItemId.value));
 }
 
 onMounted(async () => {
   loading.value = true;
   try {
     await loadLookups();
+    resetNewLine(); // ensure default UOM set
+    await refreshRecipeStatuses();
   } catch (e) {
-    toast.error(e?.response?.data?.detail || "Failed to load lookups");
+    toast.error(e?.response?.data?.detail || "Failed to load recipes screen");
   } finally {
     loading.value = false;
   }
 });
+
+// keep default UOM in sync if uoms load later
+watch(
+  () => uoms.value.length,
+  () => {
+    if (!newLine.value.uom_id) newLine.value.uom_id = defaultUomId();
+    if (recipe.value) normalizeLoadedRecipeUoms();
+  }
+);
 </script>
 
 <template>
@@ -284,423 +370,228 @@ onMounted(async () => {
       <div>
         <h4 class="page-title mb-0">Recipes</h4>
         <div class="text-muted small">
-          Build ingredient recipes for consistent costing & stock usage.
-          <span v-if="recipe" class="ms-2">
-            • <strong>{{ meta.total }}</strong> lines • <strong>{{ meta.unique }}</strong> unique ingredients
-          </span>
+          Left: menu items (with recipe status). Right: recipe editor.
         </div>
       </div>
 
       <div class="d-flex gap-2">
-        <button class="btn btn-outline-primary" :disabled="loading || !selectedMenuItemId" @click="loadRecipeForMenuItem">
-          <i class="ri-refresh-line me-1"></i> Refresh
-        </button>
-        <button class="btn btn-light" :disabled="loading" @click="clearSelection">
-          Clear
+        <button class="btn btn-outline-secondary" :disabled="loading || checking" @click="refreshRecipeStatuses">
+          <span v-if="checking"><span class="spinner-border spinner-border-sm me-1"></span> Checking…</span>
+          <span v-else>Refresh Status</span>
         </button>
       </div>
     </div>
 
-    <!-- Main layout -->
     <div class="row g-3" style="zoom: 80%;">
-      <!-- LEFT PANE -->
-      <div class="col-12 col-lg-4">
-        <div class="card menu-card allow-overflow">
+      <!-- LEFT: MENU LIST (col-md-4) -->
+      <div class="col-12 col-md-4">
+        <div class="card">
           <div class="card-body">
-            <div class="d-flex align-items-start justify-content-between gap-2">
-              <div>
-                <div class="section-title">Dish</div>
-                <div class="text-muted small">Select the menu item you want to recipe.</div>
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="fw-bold">Menu Items</div>
+              <span class="badge bg-light text-dark border">{{ filteredMenuItems.length }} shown</span>
+            </div>
+
+            <div class="row g-2 mt-2 align-items-end">
+              <div class="col-12">
+                <label class="form-label">Search</label>
+                <input v-model="menuSearch" class="form-control" placeholder="Type dish name..." />
               </div>
-              <span v-if="recipe" class="pill" :class="isDirty ? 'pill-warning' : 'pill-green'">
-                <i class="ri-checkbox-circle-line me-1" v-if="!isDirty"></i>
-                <i class="ri-alert-line me-1" v-else></i>
-                {{ isDirty ? "Unsaved" : "Saved" }}
-              </span>
-            </div>
 
-            <div class="mt-3">
-              <label class="form-label mb-1">Menu item</label>
-              <SearchSelect
-                v-model="selectedMenuItemId"
-                :options="menuItemOptions"
-                placeholder="Search menu items…"
-                :clearable="true"
-                :searchable="true"
-              />
-            </div>
-
-            <div class="mt-3 d-flex gap-2">
-              <button class="btn btn-primary w-100" :disabled="loading || !selectedMenuItemId" @click="loadRecipeForMenuItem">
-                <i class="ri-book-2-line me-1"></i> Load Recipe
-              </button>
-            </div>
-
-            <div class="divider my-3"></div>
-
-            <div class="help-card">
-              <div class="d-flex align-items-start gap-2">
-                <i class="ri-information-line mt-1"></i>
-                <div>
-                  <div class="fw-bold">Chef workflow tip</div>
-                  <div class="text-muted small">
-                    Keep one standard unit per ingredient (e.g. grams or ml). It improves stock accuracy and recipe costing.
-                  </div>
-                </div>
+              <div class="col-12">
+                <label class="form-label">Show</label>
+                <select v-model="recipeFilter" class="form-select">
+                  <option value="all">All</option>
+                  <option value="yes">With recipe</option>
+                  <option value="no">Missing recipe</option>
+                </select>
               </div>
             </div>
 
-            <div class="help-card mt-2">
-              <div class="d-flex align-items-start gap-2">
-                <i class="ri-scales-3-line mt-1"></i>
-                <div>
-                  <div class="fw-bold">Portioning rule</div>
-                  <div class="text-muted small">
-                    Record *actual usage per plate* (not purchase units). Example: “Cheddar 20g”, not “Cheddar 1 block”.
-                  </div>
-                </div>
-              </div>
+            <div class="table-responsive mt-3" style="max-height: 62vh; overflow: auto;">
+              <table class="table table-sm table-bordered align-middle mb-0">
+                <thead class="bg-light">
+                  <tr>
+                    <th>Dish</th>
+                    <th style="width: 110px">Recipe</th>
+                    <th style="width: 90px" class="text-end">Lines</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="m in filteredMenuItems"
+                    :key="m.id"
+                    role="button"
+                    :class="Number(selectedMenuItemId) === Number(m.id) ? 'table-primary' : ''"
+                    @click="ensureRecipeForMenuItem(m.id)"
+                  >
+                    <td class="fw-semibold">{{ m.name }}</td>
+                    <td>
+                      <span v-if="statusFor(m.id).checked && statusFor(m.id).has_recipe" class="badge bg-success">
+                        Yes
+                      </span>
+                      <span v-else class="badge bg-danger">No</span>
+                    </td>
+                    <td class="text-end">
+                      <span class="badge bg-light text-dark border">{{ statusFor(m.id).lines_count || 0 }}</span>
+                    </td>
+                  </tr>
+
+                  <tr v-if="filteredMenuItems.length === 0">
+                    <td colspan="3" class="text-center text-muted">No menu items found</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="text-muted small mt-2">
+              Click a dish to load/create its recipe.
             </div>
           </div>
         </div>
       </div>
 
-      <!-- RIGHT PANE -->
-      <div class="col-12 col-lg-8">
-        <!-- Sticky action bar -->
-        <div v-if="recipe" class="sticky-actions">
-          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-              <div class="section-title mb-0">Recipe Builder</div>
-              <span class="text-muted small">Add ingredients, set qty + unit, reorder if needed.</span>
+      <!-- RIGHT: RECIPE EDITOR (col-md-8) -->
+      <div class="col-12 col-md-8">
+        <div class="card">
+          <div class="card-header bg-light d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <div>
+              <div class="fw-bold">Recipe Editor</div>
+              <div class="text-muted small">
+                <span v-if="selectedMenuItemId">
+                  Dish: <b>{{ selectedMenuItemName }}</b>
+                  <span v-if="recipe" class="ms-2">• {{ meta.total }} lines • {{ meta.unique }} unique</span>
+                </span>
+                <span v-else>Select a dish on the left.</span>
+              </div>
             </div>
 
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 align-items-center">
+              <span v-if="recipe" class="badge" :class="isDirty ? 'bg-warning text-dark' : 'bg-success'">
+                {{ isDirty ? "Unsaved" : "Saved" }}
+              </span>
+
               <button class="btn btn-light" :disabled="saving || !isDirty" @click="discardChanges">
                 Discard
               </button>
+
               <button class="btn btn-primary" :disabled="!canSave" @click="saveAllLines">
                 <span v-if="saving"><span class="spinner-border spinner-border-sm me-1"></span> Saving…</span>
-                <span v-else><i class="ri-save-3-line me-1"></i> Save</span>
+                <span v-else>Save</span>
               </button>
             </div>
           </div>
-        </div>
 
-        <!-- Loading / Empty -->
-        <div v-if="loading" class="card menu-card">
-          <div class="card-body d-flex align-items-center gap-2">
-            <div class="spinner-border" role="status" aria-hidden="true"></div>
-            <div>Loading…</div>
-          </div>
-        </div>
-
-        <div v-else-if="!recipe" class="card menu-card">
-          <div class="card-body text-center text-muted py-5">
-            <div class="empty-emoji">🧾</div>
-            <div class="mt-2">Pick a menu item on the left to view/create its recipe.</div>
-          </div>
-        </div>
-
-        <template v-else>
-          <!-- Add line card (top) -->
-          <div class="card menu-card allow-overflow">
-            <div class="card-body">
-              <div class="add-strip">
-                <div class="row g-2 align-items-end">
-                  <div class="col-md-6">
-                    <label class="form-label mb-1">Inventory item</label>
-                    <SearchSelect
-                      v-model="newLine.inventory_item_id"
-                      :options="inventoryOptions"
-                      placeholder="Search inventory items…"
-                      :clearable="true"
-                      :searchable="true"
-                    />
-                  </div>
-
-                  <div class="col-md-2">
-                    <label class="form-label mb-1">Qty</label>
-                    <input
-                      v-model="newLine.qty"
-                      type="number"
-                      step="0.000001"
-                      class="form-control"
-                      placeholder="e.g. 0.25"
-                    />
-                  </div>
-
-                  <div class="col-md-2">
-                    <label class="form-label mb-1">UOM</label>
-                    <SearchSelect
-                      v-model="newLine.uom_id"
-                      :options="uomOptions"
-                      placeholder="Pick UOM…"
-                      :clearable="true"
-                      :searchable="true"
-                    />
-                  </div>
-
-                  <div class="col-md-2 d-grid">
-                    <button class="btn btn-primary" :disabled="saving" @click="addLineLocal">
-                      <i class="ri-add-line me-1"></i> Add
-                    </button>
-                  </div>
-
-                  <div class="col-12">
-                    <div class="text-muted small">
-                      Pro tip: add the “main cost drivers” first (protein, cheese, sauces) to keep recipes accurate.
-                    </div>
-                  </div>
-                </div>
-              </div>
+          <div class="card-body">
+            <div v-if="loading" class="d-flex align-items-center gap-2">
+              <div class="spinner-border" role="status" aria-hidden="true"></div>
+              <div>Loading…</div>
             </div>
-          </div>
 
-          <!-- Lines list -->
-          <div class="card menu-card mt-3">
-            <div class="card-body">
-              <div v-if="lines.length === 0" class="comp-empty text-center text-muted">
-                No ingredients yet — add your first ingredient above.
-              </div>
+            <div v-else-if="!recipe" class="text-center text-muted py-5">
+              Select a dish on the left to view or create its recipe.
+            </div>
 
-              <div v-else class="d-grid gap-2">
-                <div v-for="(l, idx) in lines" :key="`${l.id || 0}-${idx}`" class="line-row">
-                  <div class="min-w-0">
-                    <div class="line-title">
-                      <span class="pill pill-subtle me-2">#{{ idx + 1 }}</span>
-                      <span class="fw-bold" :title="invNameById(l.inventory_item_id)">
-                        {{ invNameById(l.inventory_item_id) }}
-                      </span>
-                      <span v-if="l.id" class="pill pill-green ms-2">Saved</span>
-                      <span v-else class="pill pill-gray ms-2">Local</span>
-                    </div>
+            <template v-else>
+              <!-- Add ingredient -->
+              <div class="row g-2 align-items-end">
+                <div class="col-md-6">
+                  <label class="form-label">Inventory item</label>
+                  <SearchSelect
+                    v-model="newLine.inventory_item_id"
+                    :options="inventoryOptions"
+                    placeholder="Search inventory items…"
+                    :clearable="true"
+                    :searchable="true"
+                  />
+                </div>
 
-                    <div class="text-muted small mt-1">
-                      {{ Number(l.qty || 0) }} {{ uomCodeById(l.uom_id) || "UOM" }} • Inventory ID: {{ l.inventory_item_id }}
-                    </div>
-                  </div>
+                <div class="col-md-2">
+                  <label class="form-label">Qty</label>
+                  <input v-model="newLine.qty" type="number" step="0.000001" class="form-control" />
+                </div>
 
-                  <div class="controls">
-                    <div class="control-block">
-                      <span class="mini-label">Qty</span>
-                      <input
-                        v-model="l.qty"
-                        type="number"
-                        step="0.000001"
-                        class="form-control form-control-sm"
-                      />
-                    </div>
+                <div class="col-md-2">
+                  <label class="form-label">UOM</label>
+                  <!-- Preloaded UOM, changeable -->
+                  <SearchSelect
+                    v-model="newLine.uom_id"
+                    :options="uomOptions"
+                    placeholder="Pick UOM…"
+                    :clearable="true"
+                    :searchable="true"
+                  />
+                </div>
 
-                    <div class="control-block">
-                      <span class="mini-label">UOM</span>
-                      <select v-model="l.uom_id" class="form-select form-select-sm">
-                        <option v-for="u in uoms" :key="u.id" :value="u.id">
-                          {{ u.code }}
-                        </option>
-                      </select>
-                    </div>
-
-                    <div class="btn-group-vertical btn-group-sm reorder" role="group" aria-label="Reorder">
-                      <button class="btn btn-outline-secondary" type="button" :disabled="idx===0" @click="moveUp(idx)">
-                        <i class="ri-arrow-up-s-line"></i>
-                      </button>
-                      <button
-                        class="btn btn-outline-secondary"
-                        type="button"
-                        :disabled="idx===lines.length-1"
-                        @click="moveDown(idx)"
-                      >
-                        <i class="ri-arrow-down-s-line"></i>
-                      </button>
-                    </div>
-
-                    <div class="d-flex gap-2">
-                      <button class="btn btn-sm btn-outline-danger" :disabled="saving" @click="removeLineLocal(idx)">
-                        Remove
-                      </button>
-                      <button
-                        v-if="l.id"
-                        class="btn btn-sm btn-soft-danger"
-                        :disabled="saving"
-                        @click="removeLineServer(l)"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
+                <div class="col-md-2 d-grid">
+                  <button class="btn btn-primary" :disabled="saving" @click="addLineLocal">Add</button>
                 </div>
               </div>
 
-              <div class="mt-3 d-flex justify-content-end">
-                <button class="btn btn-primary" :disabled="!canSave" @click="saveAllLines">
-                  <span v-if="saving"><span class="spinner-border spinner-border-sm me-1"></span> Saving…</span>
-                  <span v-else><i class="ri-save-3-line me-1"></i> Save Recipe</span>
-                </button>
+              <!-- Lines -->
+              <div class="table-responsive mt-3">
+                <table class="table table-sm table-bordered align-middle mb-0">
+                  <thead class="bg-light">
+                    <tr>
+                      <th>Ingredient</th>
+                      <th style="width: 140px" class="text-end">Qty</th>
+                      <th style="width: 220px">UOM</th>
+                      <th style="width: 190px"></th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    <tr v-for="(l, idx) in lines" :key="`${l.id || 0}-${idx}`">
+                      <td>
+                        <div class="fw-semibold">{{ invNameById(l.inventory_item_id) }}</div>
+                        <div class="text-muted small">
+                          {{ l.id ? "Saved" : "Local" }}
+                          • {{ Number(l.qty || 0) }} {{ uomCodeById(l.uom_id) || "UOM" }}
+                        </div>
+                      </td>
+
+                      <td class="text-end">
+                        <input
+                          v-model="l.qty"
+                          type="number"
+                          step="0.000001"
+                          class="form-control form-control-sm text-end"
+                        />
+                      </td>
+
+                      <td>
+                        <!-- Defaulted if missing, but user can still change -->
+                        <select v-model="l.uom_id" class="form-select form-select-sm">
+                          <option v-for="u in uoms" :key="u.id" :value="u.id">
+                            {{ u.code }} — {{ u.name }}
+                          </option>
+                        </select>
+                      </td>
+
+                      <td class="text-end">
+                        <button class="btn btn-sm btn-outline-danger me-2" :disabled="saving" @click="removeLineLocal(idx)">
+                          Remove
+                        </button>
+                        <button v-if="l.id" class="btn btn-sm btn-danger" :disabled="saving" @click="removeLineServer(l)">
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+
+                    <tr v-if="lines.length === 0">
+                      <td colspan="4" class="text-center text-muted">No ingredients yet</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
               <div class="text-muted small mt-2">
-                “Save Recipe” replaces all lines server-side for consistency. Reorder affects display + kitchen clarity.
+                Save replaces all lines to keep the recipe consistent.
               </div>
-            </div>
+            </template>
           </div>
-        </template>
+        </div>
       </div>
     </div>
   </DefaultLayout>
 </template>
-
-<style scoped>
-.empty-emoji { font-size: 44px; }
-
-/* Core card shell (match Items.vue) */
-.menu-card {
-  background: var(--ct-secondary-bg);
-  border: 1px solid var(--ct-border-color-translucent);
-  border-radius: 14px;
-  overflow: hidden;
-  box-shadow: var(--ct-box-shadow-sm);
-}
-
-/* Allow dropdowns to escape cards (important for SearchSelect) */
-.allow-overflow { overflow: visible !important; }
-
-.section-title {
-  font-weight: 900;
-  color: var(--ct-emphasis-color);
-}
-
-/* Nice divider */
-.divider {
-  height: 1px;
-  background: var(--ct-border-color-translucent);
-  opacity: 0.7;
-}
-
-/* Small help cards */
-.help-card {
-  border: 1px solid var(--ct-border-color-translucent);
-  background: var(--ct-tertiary-bg);
-  border-radius: 14px;
-  padding: 12px;
-}
-
-/* Sticky top action bar on builder */
-.sticky-actions {
-  position: sticky;
-  top: 14px;
-  z-index: 9;
-  border: 1px solid var(--ct-border-color-translucent);
-  background: rgba(var(--ct-body-bg-rgb), 0.85);
-  backdrop-filter: blur(6px);
-  border-radius: 14px;
-  padding: 12px 14px;
-  margin-bottom: 12px;
-  box-shadow: var(--ct-box-shadow-sm);
-}
-
-/* Add strip */
-.add-strip {
-  border: 1px solid var(--ct-border-color-translucent);
-  background: var(--ct-tertiary-bg);
-  border-radius: 14px;
-  padding: 12px;
-}
-
-/* Empty dashed */
-.comp-empty {
-  border: 1px dashed rgba(127, 127, 127, 0.35);
-  border-radius: 12px;
-  padding: 14px;
-  background: var(--ct-secondary-bg);
-  color: var(--ct-body-color);
-}
-
-/* Line row */
-.line-row {
-  border: 1px solid var(--ct-border-color-translucent);
-  background: var(--ct-secondary-bg);
-  border-radius: 14px;
-  padding: 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.line-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.controls {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.control-block {
-  width: 140px;
-}
-
-.reorder .btn {
-  padding: 2px 8px;
-}
-
-/* Labels */
-.mini-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--ct-secondary-color);
-  margin-bottom: 4px;
-}
-
-/* Pills */
-.pill {
-  display: inline-flex;
-  align-items: center;
-  font-size: 11px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-weight: 900;
-  border: 1px solid var(--ct-border-color-translucent);
-  background: rgba(var(--ct-body-color-rgb), 0.06);
-  color: var(--ct-emphasis-color);
-}
-.pill-subtle {
-  font-weight: 800;
-  background: rgba(var(--ct-body-color-rgb), 0.08);
-}
-.pill-green {
-  background: rgba(var(--ct-success-rgb), 0.14);
-  border-color: rgba(var(--ct-success-rgb), 0.22);
-  color: var(--ct-success);
-}
-.pill-gray {
-  background: rgba(127, 127, 127, 0.10);
-  border-color: var(--ct-border-color-translucent);
-  color: var(--ct-secondary-color);
-}
-.pill-warning {
-  background: rgba(var(--ct-warning-rgb), 0.16);
-  border-color: rgba(var(--ct-warning-rgb), 0.24);
-  color: var(--ct-warning);
-}
-
-/* Make SearchSelect overlay above everything */
-:deep(.searchselect .dropdown-panel) {
-  z-index: 2000 !important;
-}
-
-/* Theme-safe input-group inside SearchSelect */
-:deep(.searchselect .dropdown-panel .input-group-text) {
-  background-color: var(--ct-tertiary-bg);
-  color: var(--ct-body-color);
-  border-color: var(--ct-border-color-translucent);
-}
-</style>
