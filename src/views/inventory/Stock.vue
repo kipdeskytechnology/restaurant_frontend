@@ -12,7 +12,7 @@ const toast = useToast();
 const loading = ref(true);
 const savingAll = ref(false);
 
-const rows = ref([]);
+const rows = ref([]); // will be ALL items for the selected outlet (with on_hand defaulting to 0)
 const outlets = ref([]);
 const items = ref([]);
 
@@ -38,7 +38,6 @@ const itemById = computed(() => {
 });
 
 function getItemForRow(r) {
-  // Prefer embedded row.item if API returns it, otherwise use lookup list
   return r?.item || itemById.value.get(r.inventory_item_id) || null;
 }
 
@@ -97,53 +96,75 @@ function hasPendingRow(r) {
 
 const pendingCount = computed(() => rows.value.filter((r) => hasPendingRow(r)).length);
 
+const filteredItems = computed(() => {
+  const q = filters.value.item_q?.trim()?.toLowerCase();
+  if (!q) return items.value;
+
+  return items.value.filter((it) => {
+    const name = (it.name || "").toLowerCase();
+    const sku = (it.sku || "").toLowerCase();
+    return name.includes(q) || sku.includes(q);
+  });
+});
+
 async function loadLookups() {
   const [o, it] = await Promise.all([listOutlets(), listInventoryItems({ limit: 500 })]);
   outlets.value = o;
   items.value = it;
+
+  // Default outlet so we can list ALL items for that outlet (even if no balance exists yet)
+  if (!filters.value.outlet_id && outlets.value.length) {
+    filters.value.outlet_id = outlets.value[0].id;
+  }
 }
 
-async function loadBalances() {
-  const q = filters.value.item_q?.trim()?.toLowerCase();
-  const filteredItemIds =
-    q && q.length
-      ? new Set(
-          items.value
-            .filter((it) => {
-              const name = (it.name || "").toLowerCase();
-              const sku = (it.sku || "").toLowerCase();
-              return name.includes(q) || sku.includes(q);
-            })
-            .map((it) => it.id)
-        )
-      : null;
+async function loadBalancesAndBuildRows() {
+  const outletId = filters.value.outlet_id ? Number(filters.value.outlet_id) : null;
+  if (!outletId) {
+    rows.value = [];
+    return;
+  }
 
-  const params = {
-    outlet_id: filters.value.outlet_id ? Number(filters.value.outlet_id) : undefined,
-    // we fetch balances broadly then filter client-side by item ids (since we now have a search box)
-    // If your API supports q, you can replace this client filter with a server param.
-    item_id: undefined,
-  };
-
+  // Get balances for the selected outlet (will likely return only items that have existing stock records)
+  let balances = [];
   try {
-    const all = await listStockBalances(params);
-
-    rows.value = filteredItemIds
-      ? all.filter((r) => filteredItemIds.has(r.inventory_item_id))
-      : all;
-
-    // ensure inline state exists for visible rows
-    for (const r of rows.value) ensureInlineForRow(r);
+    balances = await listStockBalances({ outlet_id: outletId });
   } catch (e) {
     toast.error(e?.response?.data?.detail || "Failed to load stock balances");
+    balances = [];
   }
+
+  const balByItemId = new Map();
+  for (const b of balances) {
+    balByItemId.set(b.inventory_item_id, b);
+  }
+
+  const outletObj = outlets.value.find((o) => Number(o.id) === outletId) || null;
+
+  // Build rows for ALL items (filtered by search), defaulting on_hand to 0 when no balance exists
+  const built = filteredItems.value.map((it) => {
+    const b = balByItemId.get(it.id);
+    return {
+      id: `${outletId}:${it.id}`,
+      outlet_id: outletId,
+      inventory_item_id: it.id,
+      on_hand: b?.on_hand ?? 0,
+      outlet: b?.outlet || outletObj,
+      item: b?.item || it,
+    };
+  });
+
+  rows.value = built;
+
+  // Ensure inline state exists for visible rows
+  for (const r of rows.value) ensureInlineForRow(r);
 }
 
 async function loadAll() {
   loading.value = true;
   try {
     await loadLookups();
-    await loadBalances();
+    await loadBalancesAndBuildRows();
   } catch (e) {
     toast.error(e?.response?.data?.detail || "Failed to load stock data");
   } finally {
@@ -157,7 +178,12 @@ async function updateStockFromRow(r) {
   const qty = Number(st.qty_delta);
   if (!Number.isFinite(qty) || qty === 0) {
     toast.error("Qty Delta cannot be 0");
-    return;
+    return false;
+  }
+
+  if (!r.outlet_id) {
+    toast.error("Outlet is required");
+    return false;
   }
 
   const it = getItemForRow(r);
@@ -166,7 +192,7 @@ async function updateStockFromRow(r) {
 
   if (unitCost !== null && !Number.isFinite(unitCost)) {
     toast.error("Item Avg Cost is invalid; please fix it in Items");
-    return;
+    return false;
   }
 
   st.saving = true;
@@ -175,8 +201,7 @@ async function updateStockFromRow(r) {
       outlet_id: Number(r.outlet_id),
       inventory_item_id: Number(r.inventory_item_id),
       qty_delta: qty,
-      // auto-populated from Items Avg Cost
-      unit_cost: unitCost,
+      unit_cost: unitCost, // auto-populated from Items Avg Cost
       reason: st.reason?.trim() || "ADJUSTMENT",
       note: st.note?.trim() || null,
     };
@@ -213,7 +238,6 @@ async function saveAll() {
   let fail = 0;
 
   try {
-    // Sequential save (safer for backend + easier to show errors)
     for (const r of pendingRows) {
       const res = await updateStockFromRow(r);
       if (res) ok += 1;
@@ -224,7 +248,7 @@ async function saveAll() {
     else if (ok > 0 && fail > 0) toast.warning(`Saved ${ok}, failed ${fail}`);
     else toast.error(`Failed to save ${fail} update(s)`);
 
-    await loadBalances();
+    await loadBalancesAndBuildRows();
   } finally {
     savingAll.value = false;
   }
@@ -235,11 +259,11 @@ async function saveAll() {
  */
 let filterTimer = null;
 watch(
-  () => [filters.value.outlet_id, filters.value.item_q],
+  () => [filters.value.outlet_id, filters.value.item_q, items.value.length],
   () => {
     if (loading.value) return;
     clearTimeout(filterTimer);
-    filterTimer = setTimeout(() => loadBalances(), 200);
+    filterTimer = setTimeout(() => loadBalancesAndBuildRows(), 200);
   }
 );
 
@@ -263,28 +287,24 @@ onMounted(loadAll);
       </button>
     </div>
 
-    <!-- Filters (match Items.vue style) -->
+    <!-- Filters -->
     <div class="card mb-3" style="zoom: 80%;">
       <div class="card-body">
         <div class="row g-2 align-items-end">
           <div class="col-md-5">
             <label class="form-label">Outlet</label>
             <select v-model="filters.outlet_id" class="form-select">
-              <option value="">All</option>
+              <option value="" disabled>Select outlet</option>
               <option v-for="o in outlets" :key="o.id" :value="o.id">{{ o.name }}</option>
             </select>
           </div>
 
           <div class="col-md-7">
             <label class="form-label">Item Search</label>
-            <input
-              v-model="filters.item_q"
-              class="form-control"
-              placeholder="Type item name or SKU..."
-            />
+            <input v-model="filters.item_q" class="form-control" placeholder="Type item name or SKU..." />
           </div>
         </div>
-        <small class="text-muted d-block mt-2">Filters update automatically as you type.</small>
+        <small class="text-muted d-block mt-2">Items list updates automatically as you type.</small>
       </div>
     </div>
 
@@ -309,7 +329,7 @@ onMounted(loadAll);
 
             <tbody>
               <tr v-for="r in rows" :key="r.id">
-                <td>{{ r.item?.name || getItemForRow(r)?.name || r.inventory_item_id }}</td>
+                <td>{{ getItemForRow(r)?.name || r.inventory_item_id }}</td>
 
                 <td class="text-end">
                   <span class="badge bg-light text-dark border">
@@ -336,7 +356,9 @@ onMounted(loadAll);
 
                 <td>
                   <span class="badge bg-secondary">{{ getItemForRow(r)?.base_uom?.code || "-" }}</span>
-                  <span class="text-muted ms-2">{{ getItemForRow(r)?.base_uom?.name || uomText(getItemForRow(r)) }}</span>
+                  <span class="text-muted ms-2">
+                    {{ getItemForRow(r)?.base_uom?.name || uomText(getItemForRow(r)) }}
+                  </span>
                 </td>
 
                 <td>
@@ -359,7 +381,7 @@ onMounted(loadAll);
               </tr>
 
               <tr v-if="rows.length === 0">
-                <td colspan="9" class="text-center text-muted">No balances yet</td>
+                <td colspan="7" class="text-center text-muted">No items found</td>
               </tr>
             </tbody>
           </table>
