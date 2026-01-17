@@ -1,5 +1,6 @@
+<!-- src/views/inventory/Items.vue -->
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
 import { useToast } from "vue-toastification";
 
@@ -25,7 +26,7 @@ const filters = ref({
   q: "",
   category_id: "",
   active: "all", // 1|0|all
-  track: "all",  // 1|0|all
+  track: "all", // 1|0|all
 });
 
 const editing = ref(null);
@@ -65,8 +66,9 @@ async function loadAll() {
     categories.value = cats;
     uoms.value = uomList;
 
-    // default base uom if empty
-    if (!form.value.base_uom_id && uoms.value.length) form.value.base_uom_id = uoms.value[0].id;
+    if (!form.value.base_uom_id && uoms.value.length) {
+      form.value.base_uom_id = uoms.value[0].id;
+    }
 
     await loadItems();
   } catch (e) {
@@ -79,7 +81,9 @@ async function loadAll() {
 async function loadItems() {
   const params = {
     q: filters.value.q || undefined,
-    category_id: filters.value.category_id ? Number(filters.value.category_id) : undefined,
+    category_id: filters.value.category_id
+      ? Number(filters.value.category_id)
+      : undefined,
     active: filters.value.active,
     track: filters.value.track,
     limit: 500,
@@ -130,7 +134,8 @@ async function save() {
   saving.value = true;
   try {
     const payload = {
-      category_id: form.value.category_id === "" ? null : Number(form.value.category_id),
+      category_id:
+        form.value.category_id === "" ? null : Number(form.value.category_id),
       sku: form.value.sku?.trim() || null,
       name: form.value.name?.trim(),
       base_uom_id: Number(form.value.base_uom_id),
@@ -155,7 +160,6 @@ async function save() {
     toast.success("Saved");
     await loadItems();
 
-    // close bootstrap modal
     bsModal("inventoryItemModal")?.hide();
   } catch (e) {
     toast.error(e?.response?.data?.detail || "Failed to save item");
@@ -163,6 +167,24 @@ async function save() {
     saving.value = false;
   }
 }
+
+/**
+ * ✅ Live filters per keystroke (debounced)
+ */
+let filterTimer = null;
+watch(
+  () => [
+    filters.value.q,
+    filters.value.category_id,
+    filters.value.active,
+    filters.value.track,
+  ],
+  () => {
+    if (loading.value) return;
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => loadItems(), 200); // per-stroke with small debounce
+  }
+);
 
 onMounted(loadAll);
 </script>
@@ -187,20 +209,26 @@ onMounted(loadAll);
         <div class="row g-2 align-items-end">
           <div class="col-md-4">
             <label class="form-label">Search</label>
-            <input v-model="filters.q" class="form-control" placeholder="Search by name..." @keyup.enter="loadItems" />
+            <input
+              v-model="filters.q"
+              class="form-control"
+              placeholder="Search by name..."
+            />
           </div>
 
           <div class="col-md-3">
             <label class="form-label">Category</label>
-            <select v-model="filters.category_id" class="form-select" @change="loadItems">
+            <select v-model="filters.category_id" class="form-select">
               <option value="">All</option>
-              <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+              <option v-for="c in categories" :key="c.id" :value="c.id">
+                {{ c.name }}
+              </option>
             </select>
           </div>
 
           <div class="col-md-2">
             <label class="form-label">Active</label>
-            <select v-model="filters.active" class="form-select" @change="loadItems">
+            <select v-model="filters.active" class="form-select">
               <option value="all">All</option>
               <option value="1">Active</option>
               <option value="0">Inactive</option>
@@ -209,7 +237,7 @@ onMounted(loadAll);
 
           <div class="col-md-2">
             <label class="form-label">Track Stock</label>
-            <select v-model="filters.track" class="form-select" @change="loadItems">
+            <select v-model="filters.track" class="form-select">
               <option value="all">All</option>
               <option value="1">Tracking</option>
               <option value="0">Not tracking</option>
@@ -217,9 +245,13 @@ onMounted(loadAll);
           </div>
 
           <div class="col-md-1 d-grid">
-            <button class="btn btn-secondary" @click="loadItems">Go</button>
+            <button class="btn btn-secondary" :disabled="loading" @click="loadItems">
+              Refresh
+            </button>
           </div>
         </div>
+
+        <small class="text-muted d-block mt-2">Filters update automatically as you type.</small>
       </div>
     </div>
 
@@ -247,7 +279,13 @@ onMounted(loadAll);
                 <td>{{ it.sku || "-" }}</td>
                 <td>{{ it.name }}</td>
                 <td>{{ it.category?.name || "-" }}</td>
-                <td>{{ it.base_uom ? `${it.base_uom.code} - ${it.base_uom.name}` : (uomNameById.get(it.base_uom_id) || it.base_uom_id) }}</td>
+                <td>
+                  {{
+                    it.base_uom
+                      ? `${it.base_uom.code} - ${it.base_uom.name}`
+                      : (uomNameById.get(it.base_uom_id) || it.base_uom_id)
+                  }}
+                </td>
                 <td>
                   <span class="badge" :class="it.track_stock ? 'bg-success' : 'bg-secondary'">
                     {{ it.track_stock ? "Yes" : "No" }}
@@ -270,6 +308,7 @@ onMounted(loadAll);
                   </button>
                 </td>
               </tr>
+
               <tr v-if="items.length === 0">
                 <td colspan="8" class="text-center text-muted">No items found</td>
               </tr>
@@ -352,8 +391,8 @@ onMounted(loadAll);
               <span v-else>Save</span>
             </button>
           </div>
-        </div><!-- /.modal-content -->
-      </div><!-- /.modal-dialog -->
-    </div><!-- /.modal -->
+        </div>
+      </div>
+    </div>
   </DefaultLayout>
 </template>
