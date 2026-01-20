@@ -172,6 +172,7 @@ const filteredMenuItems = computed(() => {
   const q = menuSearch.value.trim().toLowerCase();
   let arr = menuItems.value || [];
 
+  // ✅ per-stroke filter (reactive computed)
   if (q) arr = arr.filter((m) => (m.name || "").toLowerCase().includes(q));
 
   if (recipeFilter.value === "yes") {
@@ -453,13 +454,28 @@ function storeLineText() {
   return out;
 }
 
+/**
+ * ✅ Watermark visible but not "overlaying" the content:
+ * - Draw watermark FIRST (background)
+ * - Make tables BODY transparent (fillColor: false) so watermark shows through
+ * - Keep text readable by using very light watermark color
+ */
 function addWatermark(doc, text = "CONFIDENTIAL") {
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
-  doc.setTextColor(235, 235, 235);
-  doc.setFontSize(60);
+
+  doc.saveGraphicsState?.();
+
+  // lighter = "more transparent" look
+  doc.setTextColor(248, 248, 248);
+  doc.setFontSize(64);
+  doc.setFont(undefined, "bold");
   doc.text(text, w / 2, h / 2, { align: "center", angle: 35 });
+
+  doc.setFont(undefined, "normal");
   doc.setTextColor(0, 0, 0);
+
+  doc.restoreGraphicsState?.();
 }
 
 function addTopBar(doc, title = "Recipe Report", subtitle = "") {
@@ -660,18 +676,40 @@ function drawDishIndex(doc, rows) {
   addWatermark(doc, "INTERNAL");
   addTopBar(doc, "Recipe Report", "Dish List (Index)");
 
+  const pageW = doc.internal.pageSize.getWidth();
+  const left = 18;
+  const right = 18;
+  const usable = pageW - left - right;
+
+  // widths must sum to `usable`
+  const w0 = 30;
+  const w2 = 90;
+  const w3 = 60;
+  const w4 = 95;
+  const w1 = usable - (w0 + w2 + w3 + w4);
+
   autoTable(doc, {
     startY: 78,
+    margin: { left, right },
+    tableWidth: usable, // ✅ lock table width
+
     head: [["#", "Dish", "Has Recipe", "Lines", "Est. Cost"]],
     body: rows,
-    styles: { fontSize: 9, cellPadding: 6 },
+
+    // ✅ keep head colored, make BODY transparent so watermark can show behind (no overlay)
+    styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
     headStyles: { fillColor: [25, 118, 210], textColor: 255 },
+    bodyStyles: { fillColor: false },
+    alternateRowStyles: { fillColor: false },
+
     columnStyles: {
-      0: { halign: "left", cellWidth: 30 },
-      2: { halign: "center", cellWidth: 80 },
-      3: { halign: "right", cellWidth: 50 },
-      4: { halign: "right", cellWidth: 85 },
+      0: { halign: "left", cellWidth: w0 },
+      1: { halign: "left", cellWidth: w1 },
+      2: { halign: "center", cellWidth: w2 },
+      3: { halign: "right", cellWidth: w3 },
+      4: { halign: "right", cellWidth: w4 },
     },
+
     didParseCell: (data) => {
       if (data.section === "body" && data.column.index === 2) {
         const v = String(data.cell.raw || "").toUpperCase();
@@ -681,7 +719,6 @@ function drawDishIndex(doc, rows) {
         data.cell.styles.fontStyle = "bold";
       }
     },
-    margin: { left: 18, right: 18 },
   });
 }
 
@@ -799,20 +836,40 @@ async function drawDishPage(doc, dish, index, total) {
       ];
     });
 
+    const pageW = doc.internal.pageSize.getWidth();
+    const left = 18;
+    const right = 18;
+    const usable = pageW - left - right;
+
+    // widths must sum to `usable`
+    const wQty = 60;
+    const wUom = 55;
+    const wAvg = 70;
+    const wLine = 70;
+    const wIng = usable - (wQty + wUom + wAvg + wLine);
+
     autoTable(doc, {
       startY,
+      margin: { left, right },
+      tableWidth: usable, // ✅ lock table width
+
       head: [["Ingredient", "Qty", "UOM", "Avg Cost", "Line Cost"]],
       body: linesArr,
-      styles: { fontSize: 9, cellPadding: 6 },
+
+      styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
       headStyles: { fillColor: [111, 66, 193], textColor: 255 },
-      alternateRowStyles: { fillColor: [248, 249, 250] },
+
+      // ✅ make BODY transparent so watermark shows behind (not over text)
+      bodyStyles: { fillColor: false },
+      alternateRowStyles: { fillColor: false },
+
       columnStyles: {
-        1: { halign: "right", cellWidth: 60 },
-        2: { halign: "center", cellWidth: 55 },
-        3: { halign: "right", cellWidth: 70 },
-        4: { halign: "right", cellWidth: 70 },
+        0: { halign: "left", cellWidth: wIng },
+        1: { halign: "right", cellWidth: wQty },
+        2: { halign: "center", cellWidth: wUom },
+        3: { halign: "right", cellWidth: wAvg },
+        4: { halign: "right", cellWidth: wLine },
       },
-      margin: { left: 18, right: 18 },
     });
 
     const finalY = doc.lastAutoTable?.finalY || startY + 20;
@@ -1132,7 +1189,7 @@ watch(
             </div>
 
             <template v-else>
-              <!-- Add ingredient (pretty) -->
+              <!-- Add ingredient -->
               <div class="add-card mb-3">
                 <div class="row g-2 align-items-end">
                   <div class="col-md-6">

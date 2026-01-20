@@ -76,7 +76,7 @@ onMounted(async () => {
 
 <template>
   <DefaultLayout>
-    <div class="page-title-box d-flex align-items-center justify-content-between">
+    <div class="page-title-box d-flex align-items-center justify-content-between" style="zoom: 80%;">
       <h4 class="page-title mb-0">Orders</h4>
 
       <router-link class="btn btn-primary" to="/pos/new-order">
@@ -84,7 +84,7 @@ onMounted(async () => {
       </router-link>
     </div>
 
-    <div class="card">
+    <div class="card" style="zoom: 80%;">
       <div class="card-body">
         <div class="row g-2 align-items-end mb-3">
           <div class="col-md-3">

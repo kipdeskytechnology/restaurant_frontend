@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "apexcharts": "^5.3.6",
     "axios": "^1.13.2",
     "bootstrap": "^5.3.8",
     "jspdf": "^4.0.0",
@@ -18,7 +19,8 @@
     "remixicon": "^4.8.0",
     "vue": "^3.5.24",
     "vue-router": "^4.6.4",
-    "vue-toastification": "^2.0.0-rc.5"
+    "vue-toastification": "^2.0.0-rc.5",
+    "vue3-apexcharts": "^1.10.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",

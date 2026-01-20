@@ -160,7 +160,7 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
         </li>
 
         <!-- Products -->
-        <li
+        <!-- <li
           class="side-nav-item"
           v-if="can('products.view')"
           :class="{ 'menuitem-active': isGroupOpen(['/products']) }"
@@ -169,7 +169,7 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
             <i class="uil-box"></i>
             <span> Products </span>
           </router-link>
-        </li>
+        </li> -->
 
         <!-- Inventory -->
         <li

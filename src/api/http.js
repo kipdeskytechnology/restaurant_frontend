@@ -3,21 +3,23 @@ import axios from "axios";
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8001";
 
-const http = axios.create({
-  baseURL,
-  timeout: 20000,
-});
+const http = axios.create({ baseURL, timeout: 20000 });
 
-// ✅ read from localStorage OR sessionStorage
 const accessToken = () =>
   localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
 
 const refreshToken = () =>
   localStorage.getItem("refresh_token") || sessionStorage.getItem("refresh_token");
 
-// ✅ store refresh result back into the same storage currently holding refresh token
 function tokenStore() {
   return localStorage.getItem("refresh_token") ? localStorage : sessionStorage;
+}
+
+function clearTokens() {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+  sessionStorage.removeItem("access_token");
+  sessionStorage.removeItem("refresh_token");
 }
 
 let isRefreshing = false;
@@ -42,6 +44,12 @@ http.interceptors.response.use(
   async (err) => {
     const original = err.config;
     const status = err.response?.status;
+
+    // ✅ do not refresh if the request IS the refresh call
+    if (original?.url?.includes("/auth/refresh")) {
+      clearTokens();
+      return Promise.reject(err);
+    }
 
     if (status === 401 && !original?._retry) {
       original._retry = true;
@@ -75,7 +83,6 @@ http.interceptors.response.use(
         store.setItem("refresh_token", newRefresh);
 
         http.defaults.headers.common.Authorization = `Bearer ${newAccess}`;
-
         processQueue(null, newAccess);
 
         original.headers = original.headers || {};
@@ -83,10 +90,8 @@ http.interceptors.response.use(
         return http(original);
       } catch (refreshErr) {
         processQueue(refreshErr, null);
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-        sessionStorage.removeItem("access_token");
-        sessionStorage.removeItem("refresh_token");
+        clearTokens();
+        // ✅ optionally: window.location.href = "/login";
         return Promise.reject(refreshErr);
       } finally {
         isRefreshing = false;

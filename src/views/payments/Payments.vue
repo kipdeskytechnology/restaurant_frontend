@@ -175,11 +175,11 @@ onMounted(async () => {
           <table class="table table-sm table-bordered mb-0">
             <thead class="bg-light">
               <tr>
-                <th style="width: 170px;">Paid At</th>
-                <th style="width: 170px;">Order</th>
-                <th style="width: 240px;">Outlet</th>
-                <th style="width: 120px;">Method</th>
-                <th class="text-end" style="width: 140px;">Amount</th>
+                <th>Paid At</th>
+                <th>Order</th>
+                <th>Outlet</th>
+                <th>Method</th>
+                <th class="text-end">Amount</th>
                 <th>Reference</th>
               </tr>
             </thead>
