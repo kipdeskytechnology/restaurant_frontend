@@ -1013,12 +1013,9 @@ function drawDishIndex(doc, rows) {
   addTopBar(doc, "Recipe Report", "Dish List (Index)");
 
   const pageW = doc.internal.pageSize.getWidth();
-  const left = PDF_THEME.margin;
-  const right = PDF_THEME.margin;
+  const left = 18;
+  const right = 18;
   const usable = pageW - left - right;
-
-  // legend
-  drawLegendPills(doc, 78);
 
   // widths must sum to `usable`
   const w0 = 28;  // #
@@ -1027,63 +1024,61 @@ function drawDishIndex(doc, rows) {
   const w4 = 72;  // Food Cost %
   const w5 = 56;  // Cost Status
   const w6 = 56;  // Recipe (YES/NO)
-  const w7 = 45;  // Page
+  const w7 = 45;  // Page (or range)
   const w1 = usable - (w0 + w2 + w3 + w4 + w5 + w6 + w7); // Dish
 
   autoTable(doc, {
     startY: 78,
     margin: { left, right },
     tableWidth: usable, // ✅ lock table width
-  
+
     head: [["#", "Dish", "Price", "Est. Cost", "Food Cost %", "Cost", "Recipe", "Page"]],
     body: rows,
-  
+
     styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
     headStyles: { fillColor: [25, 118, 210], textColor: 255 },
     bodyStyles: { fillColor: false },
     alternateRowStyles: { fillColor: false },
-  
+
     columnStyles: {
-      0: { halign: "left",  cellWidth: w0 },
-      1: { halign: "left",  cellWidth: w1 },
-      2: { halign: "right", cellWidth: w2 },
-      3: { halign: "right", cellWidth: w3 },
-      4: { halign: "right", cellWidth: w4 },
-      5: { halign: "center", cellWidth: w5 }, // Cost status pill
-      6: { halign: "center", cellWidth: w6 }, // Recipe YES/NO pill
-      7: { halign: "center", cellWidth: w7 }, // Page number
+      0: { halign: "left",   cellWidth: w0 },
+      1: { halign: "left",   cellWidth: w1 },
+      2: { halign: "right",  cellWidth: w2 },
+      3: { halign: "right",  cellWidth: w3 },
+      4: { halign: "right",  cellWidth: w4 },
+      5: { halign: "center", cellWidth: w5 }, // Cost status
+      6: { halign: "center", cellWidth: w6 }, // Recipe yes/no
+      7: { halign: "center", cellWidth: w7 }, // Page number / range
     },
-  
+
     didParseCell: (data) => {
-      // ✅ header alignment to match body columns
+      // ✅ Header alignment matches body alignment
       if (data.section === "head") {
         const col = data.column.index;
         if (col === 2 || col === 3 || col === 4) data.cell.styles.halign = "right";
         else if (col === 5 || col === 6 || col === 7) data.cell.styles.halign = "center";
         else data.cell.styles.halign = "left";
       }
-  
-      // ✅ Cost Status coloring (column 5)
+
+      // ✅ Cost Status coloring (col 5)
       if (data.section === "body" && data.column.index === 5) {
         const v = String(data.cell.raw || "").toUpperCase();
-  
-        if (v === "HIGH") data.cell.styles.fillColor = [220, 53, 69];   // red
-        else if (v === "OK") data.cell.styles.fillColor = [40, 167, 69]; // green
-        else data.cell.styles.fillColor = [108, 117, 125];              // gray
-  
+        if (v === "HIGH") data.cell.styles.fillColor = [220, 53, 69];     // red
+        else if (v === "OK") data.cell.styles.fillColor = [40, 167, 69];  // green
+        else data.cell.styles.fillColor = [108, 117, 125];                // gray
+
         data.cell.styles.textColor = 255;
         data.cell.styles.fontStyle = "bold";
         data.cell.styles.halign = "center";
       }
-  
-      // ✅ Recipe YES/NO coloring (column 6)
+
+      // ✅ Recipe YES/NO coloring (col 6)
       if (data.section === "body" && data.column.index === 6) {
         const v = String(data.cell.raw || "").toUpperCase();
-  
         if (v === "YES") data.cell.styles.fillColor = [40, 167, 69];      // green
         else if (v === "NO") data.cell.styles.fillColor = [220, 53, 69];  // red
         else data.cell.styles.fillColor = [108, 117, 125];                // gray
-  
+
         data.cell.styles.textColor = 255;
         data.cell.styles.fontStyle = "bold";
         data.cell.styles.halign = "center";
@@ -1321,15 +1316,15 @@ async function exportToPdf() {
       toast.info("No menu items to export (check filters)");
       return;
     }
-
-    // cache logo ONCE (design only)
     cachedStoreLogoDataUrl = null;
-    const logoUrl = storeLogoUrl(storeProfile.value);
-    if (logoUrl) cachedStoreLogoDataUrl = await fetchAsDataUrl(logoUrl);
+    try {
+      const logoUrl = storeLogoUrl(storeProfile.value);
+      if (logoUrl) cachedStoreLogoDataUrl = await fetchAsDataUrl(logoUrl);
+    } catch {
+      cachedStoreLogoDataUrl = null;
+    }
 
-    const doc = new jsPDF({ unit: "pt", format: "a4" });
-
-    // Build stats FIRST (so cover + index are correct)
+    // Build dish data FIRST (same as before)
     const dishes = [];
     let totalBusinessCost = 0;
     let dishesWithCost = 0;
@@ -1386,37 +1381,85 @@ async function exportToPdf() {
           : "Dishes missing recipes",
     };
 
-    // PAGE 1: cover
-    await drawCoverPage(doc, reportMeta);
+    // ---------------------------
+    // PASS 1: measure real dish page ranges
+    // ---------------------------
+    const tmp = new jsPDF({ unit: "pt", format: "a4" });
 
-    // PAGE 2+: index of all dishes
-    doc.addPage();
-    const DISH_PAGES_START_AT = 3; // cover=1, index=2, first dish page=3
+    // Cover
+    await drawCoverPage(tmp, reportMeta);
 
-    const indexRows = dishes.map((d, i) => {
+    // Index (with placeholder Page column so layout matches final)
+    tmp.addPage();
+    const tmpIndexRows = dishes.map((d, i) => {
       const pctTxt = d.foodCostPct == null ? "-" : `${d.foodCostPct.toFixed(1)}%`;
-    
       const costStatusTxt = d.hasRecipe ? d.costStatus.label : "N/A";
       const recipeStatusTxt = d.hasRecipe ? "YES" : "NO";
-      const pageNoTxt = String(DISH_PAGES_START_AT + i);
-    
+
       return [
         String(i + 1),
         d.name,
         d.price == null ? "-" : fmtMoney(d.price),
         d.hasRecipe ? fmtMoney(d.cost) : "-",
         d.hasRecipe ? pctTxt : "-",
-        costStatusTxt,      // ✅ Cost status (OK/HIGH/N/A)
-        recipeStatusTxt,    // ✅ Recipe status (YES/NO)
-        pageNoTxt,          // ✅ Page number
+        costStatusTxt,
+        recipeStatusTxt,
+        "", // placeholder page (unknown in pass 1)
+      ];
+    });
+    drawDishIndex(tmp, tmpIndexRows);
+
+    // Dish pages + capture page ranges
+    tmp.addPage();
+    const dishPages = new Map(); // id -> {start, end}
+
+    for (let i = 0; i < dishes.length; i++) {
+      if (i > 0) tmp.addPage();
+
+      const start = tmp.getNumberOfPages();
+      await drawDishPage(tmp, dishes[i], i + 1, dishes.length);
+      const end = tmp.getNumberOfPages();
+
+      dishPages.set(dishes[i].id, { start, end });
+    }
+
+    // Helper for index page cell
+    const pageCell = (id) => {
+      const p = dishPages.get(id);
+      if (!p) return "-";
+      return p.start === p.end ? String(p.start) : `${p.start}-${p.end}`;
+    };
+
+    // ---------------------------
+    // PASS 2: render final PDF with correct page numbers
+    // ---------------------------
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+
+    // Cover
+    await drawCoverPage(doc, reportMeta);
+
+    // Index with real pages
+    doc.addPage();
+    const indexRows = dishes.map((d, i) => {
+      const pctTxt = d.foodCostPct == null ? "-" : `${d.foodCostPct.toFixed(1)}%`;
+      const costStatusTxt = d.hasRecipe ? d.costStatus.label : "N/A";
+      const recipeStatusTxt = d.hasRecipe ? "YES" : "NO";
+
+      return [
+        String(i + 1),
+        d.name,
+        d.price == null ? "-" : fmtMoney(d.price),
+        d.hasRecipe ? fmtMoney(d.cost) : "-",
+        d.hasRecipe ? pctTxt : "-",
+        costStatusTxt,        // ✅ cost status
+        recipeStatusTxt,      // ✅ recipe yes/no status
+        pageCell(d.id),       // ✅ page number or range
       ];
     });
     drawDishIndex(doc, indexRows);
 
-    // After index, start dish pages on a fresh page
+    // Dish pages
     doc.addPage();
-
-    // Dish pages (one per page)
     for (let i = 0; i < dishes.length; i++) {
       if (i > 0) doc.addPage();
       await drawDishPage(doc, dishes[i], i + 1, dishes.length);
