@@ -1021,52 +1021,68 @@ function drawDishIndex(doc, rows) {
   drawLegendPills(doc, 78);
 
   // widths must sum to `usable`
-  const w0 = 30; // #
-  const w2 = 70; // Price
-  const w3 = 80; // Est. Cost
-  const w4 = 80; // Food Cost %
-  const w5 = 65; // Status
-  const w1 = usable - (w0 + w2 + w3 + w4 + w5); // Dish
+  const w0 = 28;  // #
+  const w2 = 68;  // Price
+  const w3 = 76;  // Est. Cost
+  const w4 = 72;  // Food Cost %
+  const w5 = 56;  // Cost Status
+  const w6 = 56;  // Recipe (YES/NO)
+  const w7 = 45;  // Page
+  const w1 = usable - (w0 + w2 + w3 + w4 + w5 + w6 + w7); // Dish
 
   autoTable(doc, {
     startY: 78,
     margin: { left, right },
     tableWidth: usable, // ✅ lock table width
   
-    head: [["#", "Dish", "Price", "Est. Cost", "Food Cost %", "Status"]],
+    head: [["#", "Dish", "Price", "Est. Cost", "Food Cost %", "Cost", "Recipe", "Page"]],
     body: rows,
   
-    // ✅ keep head colored, make BODY transparent so watermark can show behind
     styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
     headStyles: { fillColor: [25, 118, 210], textColor: 255 },
     bodyStyles: { fillColor: false },
     alternateRowStyles: { fillColor: false },
   
     columnStyles: {
-      0: { halign: "left", cellWidth: w0 },
-      1: { halign: "left", cellWidth: w1 },
+      0: { halign: "left",  cellWidth: w0 },
+      1: { halign: "left",  cellWidth: w1 },
       2: { halign: "right", cellWidth: w2 },
       3: { halign: "right", cellWidth: w3 },
       4: { halign: "right", cellWidth: w4 },
-      5: { halign: "center", cellWidth: w5 },
+      5: { halign: "center", cellWidth: w5 }, // Cost status pill
+      6: { halign: "center", cellWidth: w6 }, // Recipe YES/NO pill
+      7: { halign: "center", cellWidth: w7 }, // Page number
     },
   
     didParseCell: (data) => {
-      // ✅ FORCE header alignment to match body alignment
+      // ✅ header alignment to match body columns
       if (data.section === "head") {
         const col = data.column.index;
         if (col === 2 || col === 3 || col === 4) data.cell.styles.halign = "right";
-        else if (col === 5) data.cell.styles.halign = "center";
+        else if (col === 5 || col === 6 || col === 7) data.cell.styles.halign = "center";
         else data.cell.styles.halign = "left";
       }
   
-      // ✅ Status pill coloring in body (your existing behavior)
+      // ✅ Cost Status coloring (column 5)
       if (data.section === "body" && data.column.index === 5) {
         const v = String(data.cell.raw || "").toUpperCase();
   
         if (v === "HIGH") data.cell.styles.fillColor = [220, 53, 69];   // red
         else if (v === "OK") data.cell.styles.fillColor = [40, 167, 69]; // green
         else data.cell.styles.fillColor = [108, 117, 125];              // gray
+  
+        data.cell.styles.textColor = 255;
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.halign = "center";
+      }
+  
+      // ✅ Recipe YES/NO coloring (column 6)
+      if (data.section === "body" && data.column.index === 6) {
+        const v = String(data.cell.raw || "").toUpperCase();
+  
+        if (v === "YES") data.cell.styles.fillColor = [40, 167, 69];      // green
+        else if (v === "NO") data.cell.styles.fillColor = [220, 53, 69];  // red
+        else data.cell.styles.fillColor = [108, 117, 125];                // gray
   
         data.cell.styles.textColor = 255;
         data.cell.styles.fontStyle = "bold";
@@ -1375,16 +1391,24 @@ async function exportToPdf() {
 
     // PAGE 2+: index of all dishes
     doc.addPage();
+    const DISH_PAGES_START_AT = 3; // cover=1, index=2, first dish page=3
+
     const indexRows = dishes.map((d, i) => {
       const pctTxt = d.foodCostPct == null ? "-" : `${d.foodCostPct.toFixed(1)}%`;
-
+    
+      const costStatusTxt = d.hasRecipe ? d.costStatus.label : "N/A";
+      const recipeStatusTxt = d.hasRecipe ? "YES" : "NO";
+      const pageNoTxt = String(DISH_PAGES_START_AT + i);
+    
       return [
         String(i + 1),
         d.name,
         d.price == null ? "-" : fmtMoney(d.price),
         d.hasRecipe ? fmtMoney(d.cost) : "-",
         d.hasRecipe ? pctTxt : "-",
-        d.hasRecipe ? d.costStatus.label : "N/A",
+        costStatusTxt,      // ✅ Cost status (OK/HIGH/N/A)
+        recipeStatusTxt,    // ✅ Recipe status (YES/NO)
+        pageNoTxt,          // ✅ Page number
       ];
     });
     drawDishIndex(doc, indexRows);
