@@ -1,4 +1,4 @@
-/// src/views/setup/Uom.vue
+<!-- src/views/setup/Uom.vue -->
 <script setup>
 import { ref, onMounted, computed, nextTick } from "vue";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
@@ -80,6 +80,130 @@ const filteredConvs = computed(() => {
     const hay = `${from} ${to} ${c.multiplier}`.toLowerCase();
     return hay.includes(q);
   });
+});
+
+function uomCode(id) {
+  return (uomMap.value.get(Number(id))?.code || "").toUpperCase();
+}
+
+function fmt(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return String(n);
+  return x.toLocaleString(undefined, { maximumFractionDigits: 10 });
+}
+
+// common “expected” conversions (extend as you wish)
+const EXPECTED = {
+  KG: { G: 1000, MG: 1_000_000 },
+  G: { KG: 0.001, MG: 1000 },
+  MG: { G: 0.001, KG: 0.000001 },
+
+  L: { ML: 1000 },
+  ML: { L: 0.001 },
+
+  M: { CM: 100, MM: 1000 },
+  CM: { M: 0.01, MM: 10 },
+  MM: { M: 0.001, CM: 0.1 },
+};
+
+function expectedMultiplier(fromCode, toCode) {
+  return EXPECTED?.[fromCode]?.[toCode] ?? null;
+}
+
+// build graph from existing conversions for "consistency" checks
+const convGraph = computed(() => {
+  const g = new Map();
+  for (const c of conversions.value || []) {
+    const from = Number(c.from_uom_id);
+    const to = Number(c.to_uom_id);
+    const mult = Number(c.multiplier);
+    if (!from || !to || !Number.isFinite(mult) || mult <= 0) continue;
+
+    if (!g.has(from)) g.set(from, []);
+    if (!g.has(to)) g.set(to, []);
+
+    g.get(from).push({ to, factor: mult, id: c.id });
+    g.get(to).push({ to: from, factor: 1 / mult, id: c.id });
+  }
+  return g;
+});
+
+function factorFromExisting(fromId, toId, ignoreConvId = null) {
+  fromId = Number(fromId);
+  toId = Number(toId);
+  if (!fromId || !toId) return null;
+  if (fromId === toId) return 1;
+
+  const g = convGraph.value;
+  const q = [{ id: fromId, f: 1 }];
+  const seen = new Set([fromId]);
+
+  while (q.length) {
+    const { id, f } = q.shift();
+    for (const e of g.get(id) || []) {
+      if (ignoreConvId && Number(e.id) === Number(ignoreConvId)) continue;
+      if (seen.has(e.to)) continue;
+
+      const f2 = f * e.factor;
+      if (e.to === toId) return f2;
+
+      seen.add(e.to);
+      q.push({ id: e.to, f: f2 });
+    }
+  }
+  return null;
+}
+
+const convWarnings = computed(() => {
+  const fromId = Number(convForm.value.from_uom_id || 0);
+  const toId = Number(convForm.value.to_uom_id || 0);
+  const mult = Number(convForm.value.multiplier || 0);
+
+  if (!fromId || !toId || !Number.isFinite(mult) || mult <= 0) return [];
+
+  const fromC = uomCode(fromId);
+  const toC = uomCode(toId);
+
+  const out = [];
+
+  // 1) extreme magnitude hint
+  if (mult > 1e6 || mult < 1e-6) {
+    out.push(`Multiplier looks extreme: 1 ${fromC} = ${fmt(mult)} ${toC}. Double-check units/prefixes.`);
+  }
+
+  // 2) known expected conversion hint
+  const exp = expectedMultiplier(fromC, toC);
+  if (exp != null) {
+    const diff = Math.abs(mult - exp) / exp;
+    if (diff > 0.05) {
+      out.push(`Typical: 1 ${fromC} = ${fmt(exp)} ${toC} (you entered ${fmt(mult)}).`);
+    }
+  }
+
+  // 3) consistency with existing graph (excluding current editing record)
+  const implied = factorFromExisting(fromId, toId, editConvId.value);
+  if (implied != null) {
+    const diff = Math.abs(mult - implied) / implied;
+    if (diff > 0.02) {
+      out.push(`Existing conversions imply ~${fmt(implied)} ${toC} per 1 ${fromC}. Your value differs.`);
+    }
+  }
+
+  // 4) reciprocal direct check (if exists)
+  const rev = (conversions.value || []).find(
+    (c) => Number(c.from_uom_id) === toId && Number(c.to_uom_id) === fromId
+  );
+  if (rev) {
+    const revMult = Number(rev.multiplier);
+    if (Number.isFinite(revMult) && revMult > 0) {
+      const prod = mult * revMult;
+      if (Math.abs(prod - 1) > 0.05) {
+        out.push(`Reverse conversion exists; expected multiplier × reverse ≈ 1 (currently ${fmt(prod)}).`);
+      }
+    }
+  }
+
+  return out;
 });
 
 function resetUomForm() {
@@ -342,7 +466,7 @@ onMounted(load);
       <!-- RIGHT: Conversions -->
       <div class="col-lg-7">
         <!-- Create/Edit card (TOP) -->
-        <div ref="convFormCardEl" class="card uom-card position-relative">
+        <div ref="convFormCardEl" class="card uom-card uom-card--overflow position-relative">
           <div class="card-header bg-transparent d-flex align-items-center justify-content-between">
             <div>
               <div class="uom-title">{{ isEditConv ? "Edit Conversion" : "Create Conversion" }}</div>
@@ -394,6 +518,20 @@ onMounted(load);
                   class="form-control"
                   placeholder="e.g. 1000"
                 />
+                <div v-if="convWarnings.length" class="alert alert-warning py-2 mt-2 mb-0">
+                  <div class="fw-semibold mb-1">
+                    <i class="ri-alert-line me-1"></i> Please double-check this conversion
+                  </div>
+                  <ul class="mb-0 ps-3">
+                    <li v-for="(w, i) in convWarnings" :key="i">{{ w }}</li>
+                  </ul>
+                </div>
+                
+                <div v-if="convForm.from_uom_id && convForm.to_uom_id && convForm.multiplier" class="text-muted small mt-1">
+                  Inverse: 1 {{ codeFor(Number(convForm.to_uom_id)) }} =
+                  {{ (1 / Number(convForm.multiplier)).toLocaleString(undefined, { maximumFractionDigits: 10 }) }}
+                  {{ codeFor(Number(convForm.from_uom_id)) }}
+                </div>
               </div>
             </div>
 
@@ -630,5 +768,21 @@ onMounted(load);
   align-items: center;
   justify-content: center;
   z-index: 10;
+}
+
+.uom-card--overflow {
+  overflow: visible !important;
+}
+
+/* If your SearchSelect is based on vue-select (common), boost menu z-index */
+.uom-card--overflow :deep(.vs__dropdown-menu) {
+  z-index: 9999;
+}
+
+/* If your SearchSelect uses a different menu class, add it too */
+.uom-card--overflow :deep(.dropdown-menu),
+.uom-card--overflow :deep(.search-select__menu),
+.uom-card--overflow :deep(.search-select__dropdown) {
+  z-index: 9999;
 }
 </style>

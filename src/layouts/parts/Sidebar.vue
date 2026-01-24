@@ -186,8 +186,8 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
           <div class="collapse" id="sidebarInventory" data-bs-parent="#sidebar-accordion"
                :class="{ show: isGroupOpen(['/inventory','/stock','/audits','/stock-ledger']) }">
             <ul class="side-nav-second-level">
-              <li><router-link to="/inventory/items">Items</router-link></li>
               <li><router-link to="/inventory/categories">Categories</router-link></li>
+              <li><router-link to="/inventory/items">Items</router-link></li>
               <li><router-link to="/inventory/stock">Stock Balances</router-link></li>
               <li v-if="can('inventory.ledger')"><router-link to="/inventory/ledger">Stock Ledger</router-link></li>
               <li v-if="can('inventory_audits.view')"><router-link to="/inventory/audits">Inventory Audits</router-link></li>

@@ -10,7 +10,7 @@ const routes = [
   { path: "/forgot", name: "forgot", component: () => import("../views/auth/ForgotPassword.vue"), meta: { public: true } },
   { path: "/auth/reset-password", name: "reset-password", component: () => import("../views/auth/ResetPassword.vue"), meta: { public: true } },
 
-  { path: "/", name: "dashboard", component: DashboardView, meta: { requiresAuth: true } },
+  { path: "/", redirect: "/dashboard" },
   { path: "/dashboard", name: "dashboard", component: DashboardView, meta: { requiresAuth: true } },
   { path: "/system/stores", name: "system-stores", component: () => import("../views/system/StoreProfile.vue"),},
   { path: "/system/outlets", name: "system-outlets", component: () => import("../views/system/Outlets.vue"),},

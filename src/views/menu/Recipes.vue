@@ -13,7 +13,7 @@ import {
   deleteRecipeLine,
 } from "../../api/recipes";
 
-import { listUoms } from "../../api/setupUom";
+import { listUoms, listUomConversions } from "../../api/setupUom";
 import { listInventoryItems } from "../../api/inventory";
 import { getMyStoreProfile } from "../../api/systemStores";
 
@@ -30,6 +30,7 @@ const exporting = ref(false);
 
 const menuItems = ref([]);
 const uoms = ref([]);
+const uomConversions = ref([]);
 const inventoryItems = ref([]);
 const storeProfile = ref(null);
 
@@ -122,6 +123,89 @@ const uomCodeById = computed(() => {
   return (id) => m.get(Number(id)) || "";
 });
 
+
+// Build weighted graph:
+// 1 FROM = multiplier * TO  => qty_to = qty_from * multiplier
+const convGraph = computed(() => {
+  const g = new Map(); // uomId -> [{ to, factor }]
+  for (const c of uomConversions.value || []) {
+    const from = Number(c.from_uom_id);
+    const to = Number(c.to_uom_id);
+    const mult = Number(c.multiplier);
+
+    if (!from || !to || !Number.isFinite(mult) || mult <= 0) continue;
+
+    if (!g.has(from)) g.set(from, []);
+    if (!g.has(to)) g.set(to, []);
+
+    g.get(from).push({ to, factor: mult });
+    g.get(to).push({ to: from, factor: 1 / mult }); // reverse
+  }
+  return g;
+});
+
+// factor(from, to): multiply qty_in_from by this to get qty_in_to
+function conversionFactor(fromId, toId) {
+  fromId = Number(fromId);
+  toId = Number(toId);
+
+  if (!fromId || !toId) return null;
+  if (fromId === toId) return 1;
+
+  const g = convGraph.value;
+  const q = [{ id: fromId, f: 1 }];
+  const seen = new Set([fromId]);
+
+  while (q.length) {
+    const { id, f } = q.shift();
+    for (const e of g.get(id) || []) {
+      if (seen.has(e.to)) continue;
+      const f2 = f * e.factor;
+      if (e.to === toId) return f2;
+      seen.add(e.to);
+      q.push({ id: e.to, f: f2 });
+    }
+  }
+  return null;
+}
+
+// compatible UOM IDs for an inventory item (base + all reachable via conversions)
+function compatibleUomIdsForInventory(invId) {
+  const inv = invById.value.get(Number(invId));
+  const baseId = Number(inv?.base_uom_id || 0);
+
+  if (!baseId) return (uoms.value || []).map((u) => Number(u.id));
+
+  const g = convGraph.value;
+  const seen = new Set([baseId]);
+  const q = [baseId];
+
+  while (q.length) {
+    const cur = q.shift();
+    for (const e of g.get(cur) || []) {
+      if (seen.has(e.to)) continue;
+      seen.add(e.to);
+      q.push(e.to);
+    }
+  }
+
+  return Array.from(seen);
+}
+
+// For SearchSelect (label/value)
+function uomOptionsForInventory(invId) {
+  const allowed = new Set(compatibleUomIdsForInventory(invId));
+  return (uoms.value || [])
+    .filter((u) => allowed.has(Number(u.id)))
+    .map((u) => ({ label: `${u.code} — ${u.name}`, value: u.id }));
+}
+
+// For <select> rows (uom objects)
+function uomsForInventory(invId) {
+  const allowed = new Set(compatibleUomIdsForInventory(invId));
+  return (uoms.value || []).filter((u) => allowed.has(Number(u.id)));
+}
+
 // ---------- recipe state ----------
 const lines = computed(() => recipe.value?.lines || []);
 
@@ -201,10 +285,16 @@ function defaultUomId() {
 }
 
 function ensureLineUom(line) {
-  const id = Number(line?.uom_id || 0);
-  if (id) return;
-  const def = defaultUomId();
-  if (def) line.uom_id = def;
+  const invId = Number(line?.inventory_item_id || 0);
+  const allowed = compatibleUomIdsForInventory(invId);
+
+  if (!allowed?.length) return;
+
+  const cur = Number(line?.uom_id || 0);
+  if (allowed.includes(cur)) return;
+
+  const inv = invById.value.get(invId);
+  line.uom_id = Number(inv?.base_uom_id || allowed[0]);
 }
 
 function normalizeLoadedRecipeUoms() {
@@ -225,9 +315,9 @@ function setSnapshot() {
 async function loadLookups() {
   menuItems.value = await listMenuItems({ limit: 500, available: "all" });
   uoms.value = await listUoms();
+  uomConversions.value = await listUomConversions();
   inventoryItems.value = await listInventoryItems();
 
-  // preload default UOM (changeable)
   if (!newLine.value.uom_id) newLine.value.uom_id = defaultUomId();
 }
 
@@ -520,14 +610,18 @@ function addFooter(doc, pageNo, totalPages, rightText = "") {
 
 function computeLineCost(inv, qty, uomId) {
   if (!inv) return null;
-  const avg = Number(inv.avg_cost);
+
+  const avg = Number(inv.avg_cost);         // avg_cost per BASE UOM
   const base = Number(inv.base_uom_id);
   const q = Number(qty);
 
-  if (!Number.isFinite(avg) || !Number.isFinite(q)) return null;
-  if (!base || Number(base) !== Number(uomId)) return null;
+  if (!Number.isFinite(avg) || !Number.isFinite(q) || !base) return null;
 
-  return avg * q;
+  const f = conversionFactor(Number(uomId), base); // qty_in_uom -> qty_in_base
+  if (f == null) return null;
+
+  const qtyInBase = q * f;
+  return avg * qtyInBase;
 }
 
 function computeRecipeCost(recipeObj) {
@@ -1021,10 +1115,22 @@ onMounted(async () => {
 });
 
 watch(
-  () => uoms.value.length,
-  () => {
-    if (!newLine.value.uom_id) newLine.value.uom_id = defaultUomId();
-    if (recipe.value) normalizeLoadedRecipeUoms();
+  () => newLine.value.inventory_item_id,
+  (invId) => {
+    if (!invId) {
+      newLine.value.uom_id = defaultUomId();
+      return;
+    }
+
+    const inv = invById.value.get(Number(invId));
+    const base = Number(inv?.base_uom_id || 0);
+
+    const opts = uomOptionsForInventory(invId);
+    const baseOpt = opts.find((o) => Number(o.value) === base);
+
+    newLine.value.uom_id = baseOpt
+      ? baseOpt.value
+      : (opts[0]?.value ?? null);
   }
 );
 </script>
@@ -1218,7 +1324,7 @@ watch(
                     <label class="form-label">UOM</label>
                     <SearchSelect
                       v-model="newLine.uom_id"
-                      :options="uomOptions"
+                      :options="uomOptionsForInventory(newLine.inventory_item_id)"
                       placeholder="Pick UOM…"
                       :clearable="true"
                       :searchable="true"
@@ -1266,7 +1372,7 @@ watch(
 
                       <td>
                         <select v-model="l.uom_id" class="form-select form-select-sm">
-                          <option v-for="u in uoms" :key="u.id" :value="u.id">
+                          <option v-for="u in uomsForInventory(l.inventory_item_id)" :key="u.id" :value="u.id">
                             {{ u.code }} — {{ u.name }}
                           </option>
                         </select>
