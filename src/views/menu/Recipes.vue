@@ -47,6 +47,28 @@ const recipeFilter = ref("all"); // all | yes | no
 // status map: { [menuId]: { has_recipe: bool, lines_count: number, checked: bool } }
 const recipeStatusByMenuId = ref({});
 
+function getMenuPrice(menuItemRaw) {
+  // menu item price from backend (MenuItem.price)
+  const p = Number(menuItemRaw?.price);
+  return Number.isFinite(p) ? p : null;
+}
+
+function foodCostPct(cost, price) {
+  const c = Number(cost);
+  const p = Number(price);
+  if (!Number.isFinite(c) || !Number.isFinite(p) || p <= 0) return null;
+  return (c / p) * 100;
+}
+
+// You can change this threshold any time (e.g. 30% or 35%)
+const HIGH_FOOD_COST_PCT = 80;
+
+function costStatus(pct) {
+  if (pct == null) return { label: "N/A", kind: "na" };
+  if (pct >= HIGH_FOOD_COST_PCT) return { label: "HIGH", kind: "high" };
+  return { label: "OK", kind: "ok" };
+}
+
 // add line draft (UOM preloaded)
 const newLine = ref({
   inventory_item_id: null,
@@ -122,7 +144,6 @@ const uomCodeById = computed(() => {
   const m = new Map((uoms.value || []).map((u) => [Number(u.id), u.code]));
   return (id) => m.get(Number(id)) || "";
 });
-
 
 // Build weighted graph:
 // 1 FROM = multiplier * TO  => qty_to = qty_from * multiplier
@@ -435,7 +456,9 @@ async function removeLineServer(line) {
   loading.value = true;
   try {
     await deleteRecipeLine(recipe.value.id, line.id);
-    recipe.value.lines = (recipe.value.lines || []).filter((x) => x.id !== line.id);
+    recipe.value.lines = (recipe.value.lines || []).filter(
+      (x) => x.id !== line.id
+    );
     toast.success("Line deleted");
   } catch (e) {
     toast.error(e?.response?.data?.detail || "Failed to delete line");
@@ -483,7 +506,7 @@ async function discardChanges() {
   await ensureRecipeForMenuItem(Number(selectedMenuItemId.value));
 }
 
-// ---------- PDF EXPORT (REDESIGNED) ----------
+// ---------- PDF EXPORT (DESIGN IMPROVED ONLY) ----------
 function fmtMoney(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "-";
@@ -519,6 +542,7 @@ async function fetchAsDataUrl(url) {
         canvas.height = img.naturalHeight || img.height;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
+        // Always PNG output (stable for jsPDF)
         resolve(canvas.toDataURL("image/png"));
       } catch {
         resolve(null);
@@ -526,8 +550,6 @@ async function fetchAsDataUrl(url) {
     };
 
     img.onerror = () => resolve(null);
-
-    // ✅ force fresh response (avoids cached non-CORS copy)
     img.src = withCacheBust(url);
   });
 }
@@ -544,11 +566,86 @@ function storeLineText() {
   return out;
 }
 
+// --- PDF theme (design only) ---
+const PDF_THEME = {
+  margin: 18,
+  barH: 64,
+  radius: 14,
+  brand: {
+    primary: [111, 66, 193], // purple
+    accent: [255, 111, 0], // orange
+    info: [0, 188, 212], // cyan
+    blueHead: [25, 118, 210],
+  },
+  gray: {
+    text: [25, 25, 25],
+    muted: [110, 110, 110],
+    line: [232, 232, 232],
+    card: [248, 249, 250],
+    white: [255, 255, 255],
+  },
+  status: {
+    ok: [40, 167, 69],
+    high: [220, 53, 69],
+    na: [108, 117, 125],
+    warn: [255, 193, 7],
+  },
+};
+
+let cachedStoreLogoDataUrl = null;
+
+// small helpers (design only)
+function safeSetFont(doc, style = "normal") {
+  // keep default family, only style (bold/normal)
+  try {
+    doc.setFont(undefined, style);
+  } catch {
+    // ignore if not supported in runtime
+  }
+}
+
+function withOpacity(doc, opacity, fn) {
+  try {
+    if (doc.setGState && doc.GState) {
+      const gs = new doc.GState({ opacity, "stroke-opacity": opacity });
+      doc.setGState(gs);
+      fn();
+      doc.setGState(new doc.GState({ opacity: 1, "stroke-opacity": 1 }));
+      return;
+    }
+  } catch {
+    // ignore
+  }
+  fn();
+}
+
+function drawImageContain(doc, dataUrl, x, y, w, h, padding = 0) {
+  if (!dataUrl) return;
+  try {
+    const props = doc.getImageProperties(dataUrl);
+    const iw = props?.width || 1;
+    const ih = props?.height || 1;
+    const maxW = Math.max(1, w - padding * 2);
+    const maxH = Math.max(1, h - padding * 2);
+    const r = Math.min(maxW / iw, maxH / ih);
+    const dw = iw * r;
+    const dh = ih * r;
+    const dx = x + (w - dw) / 2;
+    const dy = y + (h - dh) / 2;
+    doc.addImage(dataUrl, "PNG", dx, dy, dw, dh);
+  } catch {
+    // fallback: draw as-is
+    try {
+      doc.addImage(dataUrl, "PNG", x + padding, y + padding, w - padding * 2, h - padding * 2);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /**
- * ✅ Watermark visible but not "overlaying" the content:
- * - Draw watermark FIRST (background)
- * - Make tables BODY transparent (fillColor: false) so watermark shows through
- * - Keep text readable by using very light watermark color
+ * ✅ Watermark: drawn FIRST (background)
+ * - uses light opacity when supported
  */
 function addWatermark(doc, text = "CONFIDENTIAL") {
   const w = doc.internal.pageSize.getWidth();
@@ -556,32 +653,72 @@ function addWatermark(doc, text = "CONFIDENTIAL") {
 
   doc.saveGraphicsState?.();
 
-  // lighter = "more transparent" look
-  doc.setTextColor(248, 248, 248);
-  doc.setFontSize(64);
-  doc.setFont(undefined, "bold");
-  doc.text(text, w / 2, h / 2, { align: "center", angle: 35 });
+  withOpacity(doc, 0.08, () => {
+    doc.setTextColor(80, 80, 80);
+    doc.setFontSize(72);
+    safeSetFont(doc, "bold");
+    doc.text(text, w / 2, h / 2, { align: "center", angle: 35 });
+    safeSetFont(doc, "normal");
+  });
 
-  doc.setFont(undefined, "normal");
   doc.setTextColor(0, 0, 0);
-
   doc.restoreGraphicsState?.();
 }
 
 function addTopBar(doc, title = "Recipe Report", subtitle = "") {
   const w = doc.internal.pageSize.getWidth();
-  doc.setFillColor(111, 66, 193); // purple
-  doc.rect(0, 0, w, 54, "F");
-  doc.setFillColor(255, 111, 0); // orange accent
-  doc.rect(0, 54, w, 4, "F");
+  const h = PDF_THEME.barH;
 
+  // solid brand bar + accent line (clean, modern)
+  doc.setFillColor(...PDF_THEME.brand.primary);
+  doc.rect(0, 0, w, h, "F");
+  doc.setFillColor(...PDF_THEME.brand.accent);
+  doc.rect(0, h - 4, w, 4, "F");
+
+  // subtle bottom hairline
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.line(0, h, w, h);
+
+  // title + subtitle
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(16);
-  doc.text(title, 18, 32);
+  doc.setFontSize(15);
+  safeSetFont(doc, "bold");
+  doc.text(title, PDF_THEME.margin, 28);
+  safeSetFont(doc, "normal");
 
   if (subtitle) {
     doc.setFontSize(10);
-    doc.text(subtitle, 18, 46);
+    doc.text(subtitle, PDF_THEME.margin, 46);
+  }
+
+  // right badge + optional logo
+  const badgeText = "INTERNAL";
+  doc.setFontSize(9);
+  const tw = doc.getTextWidth(badgeText);
+  const padX = 10;
+  const bx = w - PDF_THEME.margin - (tw + padX * 2);
+  const by = 18;
+
+  // badge background
+  withOpacity(doc, 0.18, () => {
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(bx, by - 12, tw + padX * 2, 18, 7, 7, "F");
+  });
+
+  doc.setTextColor(255, 255, 255);
+  safeSetFont(doc, "bold");
+  doc.text(badgeText, bx + padX, by);
+  safeSetFont(doc, "normal");
+
+  // small logo chip (purely visual)
+  if (cachedStoreLogoDataUrl) {
+    const lx = bx - 30;
+    const ly = by - 18;
+    doc.setFillColor(255, 255, 255);
+    withOpacity(doc, 0.22, () => {
+      doc.roundedRect(lx, ly, 22, 22, 8, 8, "F");
+    });
+    drawImageContain(doc, cachedStoreLogoDataUrl, lx, ly, 22, 22, 2);
   }
 
   doc.setTextColor(0, 0, 0);
@@ -590,20 +727,21 @@ function addTopBar(doc, title = "Recipe Report", subtitle = "") {
 function addFooter(doc, pageNo, totalPages, rightText = "") {
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
+  const m = PDF_THEME.margin;
 
-  doc.setDrawColor(235);
-  doc.line(18, h - 38, w - 18, h - 38);
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.line(m, h - 38, w - m, h - 38);
 
   doc.setFontSize(9);
-  doc.setTextColor(130);
+  doc.setTextColor(...PDF_THEME.gray.muted);
 
   const left = storeProfile.value?.name ? `${storeProfile.value.name}` : "Store";
-  doc.text(left, 18, h - 22);
+  doc.text(left, m, h - 22);
 
   const mid = `Page ${pageNo} of ${totalPages}`;
   doc.text(mid, w / 2, h - 22, { align: "center" });
 
-  if (rightText) doc.text(rightText, w - 18, h - 22, { align: "right" });
+  if (rightText) doc.text(rightText, w - m, h - 22, { align: "right" });
 
   doc.setTextColor(0, 0, 0);
 }
@@ -611,7 +749,7 @@ function addFooter(doc, pageNo, totalPages, rightText = "") {
 function computeLineCost(inv, qty, uomId) {
   if (!inv) return null;
 
-  const avg = Number(inv.avg_cost);         // avg_cost per BASE UOM
+  const avg = Number(inv.avg_cost); // avg_cost per BASE UOM
   const base = Number(inv.base_uom_id);
   const q = Number(qty);
 
@@ -649,121 +787,225 @@ function splitParagraph(doc, text, x, y, maxWidth, lineHeight = 14) {
   return y + lines.length * lineHeight;
 }
 
+function drawStatCard(doc, x, y, w, h, label, value, accentKind = "primary") {
+  doc.setFillColor(...PDF_THEME.gray.white);
+  doc.roundedRect(x, y, w, h, PDF_THEME.radius, PDF_THEME.radius, "F");
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.roundedRect(x, y, w, h, PDF_THEME.radius, PDF_THEME.radius, "S");
+
+  // accent strip
+  const accent =
+    accentKind === "accent"
+      ? PDF_THEME.brand.accent
+      : accentKind === "info"
+      ? PDF_THEME.brand.info
+      : PDF_THEME.brand.primary;
+  doc.setFillColor(...accent);
+  doc.roundedRect(x, y, 6, h, 8, 8, "F");
+
+  doc.setTextColor(...PDF_THEME.gray.muted);
+  doc.setFontSize(9);
+  doc.text(label, x + 16, y + 22);
+
+  doc.setTextColor(...PDF_THEME.gray.text);
+  doc.setFontSize(18);
+  safeSetFont(doc, "bold");
+  doc.text(String(value), x + 16, y + 50);
+  safeSetFont(doc, "normal");
+
+  doc.setTextColor(0, 0, 0);
+}
+
 async function drawCoverPage(doc, reportMeta) {
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
+  const m = PDF_THEME.margin;
 
   addWatermark(doc, "INTERNAL");
-  addTopBar(doc, "Confidential Recipe Report", "Store Recipe & Costing Pack");
 
-  const logoUrl = storeLogoUrl(storeProfile.value);
-  const logoDataUrl = logoUrl ? await fetchAsDataUrl(logoUrl) : null;
+  // top hero band
+  doc.setFillColor(...PDF_THEME.brand.primary);
+  doc.rect(0, 0, w, 170, "F");
+  doc.setFillColor(...PDF_THEME.brand.accent);
+  doc.rect(0, 170, w, 6, "F");
 
-  const storeName = storeProfile.value?.name || "Store";
-  const topY = 84;
+  // logo block
+  const topY = 44;
+  doc.setFillColor(255, 255, 255);
+  withOpacity(doc, 0.16, () => {
+    doc.roundedRect(m, topY, 76, 76, 18, 18, "F");
+  });
 
-  // logo box
-  if (logoDataUrl) {
-    try {
-      doc.setFillColor(255, 255, 255);
-      doc.roundedRect(18, topY, 78, 78, 14, 14, "F");
-      doc.addImage(logoDataUrl, "PNG", 26, topY + 8, 62, 62);
-    } catch {
-      // ignore
-    }
+  if (cachedStoreLogoDataUrl) {
+    drawImageContain(doc, cachedStoreLogoDataUrl, m, topY, 76, 76, 10);
   } else {
-    doc.setFillColor(245, 245, 245);
-    doc.roundedRect(18, topY, 78, 78, 14, 14, "F");
-    doc.setTextColor(140);
+    doc.setTextColor(255, 255, 255);
     doc.setFontSize(10);
-    doc.text("LOGO", 57, topY + 44, { align: "center" });
-    doc.setTextColor(0);
+    doc.text("LOGO", m + 38, topY + 44, { align: "center" });
   }
 
-  // big store name
-  doc.setFontSize(28);
-  doc.setTextColor(20, 20, 20);
-  doc.setFont(undefined, "bold");
-  doc.text(storeName, 110, topY + 34);
-  doc.setFont(undefined, "normal");
-
-  doc.setFontSize(11);
-  doc.setTextColor(90, 90, 90);
-  doc.text("Recipe & Costing Summary", 110, topY + 56);
-
-  // store info card
-  const cardY = 190;
-  doc.setFillColor(248, 249, 250);
-  doc.roundedRect(18, cardY, w - 36, 120, 14, 14, "F");
-
-  doc.setTextColor(25, 25, 25);
+  const storeName = storeProfile.value?.name || "Store";
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(22);
+  safeSetFont(doc, "bold");
+  doc.text("Recipe & Costing Pack", m + 92, 74);
+  safeSetFont(doc, "normal");
   doc.setFontSize(12);
-  doc.setFont(undefined, "bold");
-  doc.text("Store Information", 34, cardY + 28);
-  doc.setFont(undefined, "normal");
+  withOpacity(doc, 0.95, () => {
+    doc.text(storeName, m + 92, 96);
+  });
 
-  const linesTxt = storeLineText();
   doc.setFontSize(10);
-  doc.setTextColor(70, 70, 70);
+  withOpacity(doc, 0.85, () => {
+    doc.text(
+      `Generated: ${new Date().toLocaleString()}`,
+      m + 92,
+      118
+    );
+    doc.text(
+      `Scope: ${reportMeta.scopeLabel}`,
+      m + 92,
+      136
+    );
+  });
 
-  let yy = cardY + 48;
+  // stat row
+  const gap = 12;
+  const cardY = 200;
+  const cardH = 76;
+  const cardW = (w - m * 2 - gap * 2) / 3;
+
+  drawStatCard(doc, m, cardY, cardW, cardH, "Total Dishes", reportMeta.totalDishes, "info");
+  drawStatCard(
+    doc,
+    m + cardW + gap,
+    cardY,
+    cardW,
+    cardH,
+    "Dishes Costed",
+    `${reportMeta.dishesWithCost}/${reportMeta.totalDishes}`,
+    "accent"
+  );
+  drawStatCard(
+    doc,
+    m + (cardW + gap) * 2,
+    cardY,
+    cardW,
+    cardH,
+    "Total Est. Cost",
+    fmtMoney(reportMeta.totalBusinessCost),
+    "primary"
+  );
+
+  // Store info card
+  const infoY = 296;
+  doc.setFillColor(...PDF_THEME.gray.card);
+  doc.roundedRect(m, infoY, w - m * 2, 112, PDF_THEME.radius, PDF_THEME.radius, "F");
+
+  doc.setTextColor(...PDF_THEME.gray.text);
+  doc.setFontSize(12);
+  safeSetFont(doc, "bold");
+  doc.text("Store Information", m + 16, infoY + 28);
+  safeSetFont(doc, "normal");
+
+  doc.setFontSize(10);
+  doc.setTextColor(...PDF_THEME.gray.muted);
+  let yy = infoY + 50;
+  const linesTxt = storeLineText();
   if (linesTxt.length) {
     for (const ln of linesTxt) {
-      doc.text(ln, 34, yy);
+      doc.text(ln, m + 16, yy);
       yy += 14;
     }
   } else {
-    doc.text("Store information not available.", 34, yy);
-    yy += 14;
+    doc.text("Store information not available.", m + 16, yy);
   }
 
-  // confidentiality paragraph
+  // Confidentiality card
+  const noticeY = 428;
+  doc.setFillColor(...PDF_THEME.gray.white);
+  doc.roundedRect(m, noticeY, w - m * 2, 152, PDF_THEME.radius, PDF_THEME.radius, "F");
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.roundedRect(m, noticeY, w - m * 2, 152, PDF_THEME.radius, PDF_THEME.radius, "S");
+
+  // left accent
+  doc.setFillColor(...PDF_THEME.status.high);
+  doc.roundedRect(m, noticeY, 6, 152, 8, 8, "F");
+
+  doc.setTextColor(220, 53, 69);
+  doc.setFontSize(12);
+  safeSetFont(doc, "bold");
+  doc.text("Security & Confidentiality Notice", m + 18, noticeY + 30);
+  safeSetFont(doc, "normal");
+
   const para =
     "CONFIDENTIAL BUSINESS RECIPE DOCUMENT — This report contains proprietary recipes, ingredient usage, and costing estimates. " +
     "It is intended strictly for authorized management and approved staff. Unauthorized access, sharing, copying, or distribution is prohibited. " +
     "Keep this document secure at all times and handle it as sensitive business information.";
 
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(18, 328, w - 36, 120, 14, 14, "F");
-
-  doc.setFontSize(12);
-  doc.setTextColor(220, 53, 69);
-  doc.setFont(undefined, "bold");
-  doc.text("Security & Confidentiality Notice", 34, 356);
-  doc.setFont(undefined, "normal");
-
   doc.setFontSize(10);
-  doc.setTextColor(70, 70, 70);
-  splitParagraph(doc, para, 34, 376, w - 68, 14);
+  doc.setTextColor(...PDF_THEME.gray.muted);
+  splitParagraph(doc, para, m + 18, noticeY + 54, w - m * 2 - 36, 14);
 
-  // business cost card
-  doc.setFillColor(111, 66, 193);
-  doc.roundedRect(18, 470, w - 36, 92, 16, 16, "F");
+  // Bottom highlight
+  const bottomY = 606;
+  doc.setFillColor(...PDF_THEME.brand.primary);
+  doc.roundedRect(m, bottomY, w - m * 2, 96, 18, 18, "F");
 
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(12);
-  doc.setFont(undefined, "bold");
-  doc.text("Current Cost of Running the Business (Estimated)", 34, 498);
-  doc.setFont(undefined, "normal");
+  doc.setFontSize(11);
+  safeSetFont(doc, "bold");
+  doc.text("Estimated Cost Snapshot", m + 18, bottomY + 30);
+  safeSetFont(doc, "normal");
 
-  doc.setFontSize(28);
-  doc.text(`${fmtMoney(reportMeta.totalBusinessCost)}`, 34, 534);
+  doc.setFontSize(26);
+  safeSetFont(doc, "bold");
+  doc.text(`${fmtMoney(reportMeta.totalBusinessCost)}`, m + 18, bottomY + 68);
+  safeSetFont(doc, "normal");
 
-  doc.setFontSize(10);
+  doc.setFontSize(9);
   doc.setTextColor(235, 235, 235);
   doc.text(
-    `Based on ingredient avg_cost where recipe UOM equals ingredient Base UOM • ${reportMeta.dishesWithCost}/${reportMeta.totalDishes} dishes costed`,
-    34,
-    554
+    `Based on inventory avg_cost and UOM conversions • ${reportMeta.dishesWithCost}/${reportMeta.totalDishes} dishes costed`,
+    m + 18,
+    bottomY + 86
   );
 
-  // generated stamp
-  doc.setTextColor(120);
-  doc.setFontSize(9);
-  doc.text(`Generated: ${new Date().toLocaleString()}`, 18, h - 52);
-  doc.text(`Report Scope: ${reportMeta.scopeLabel}`, w - 18, h - 52, { align: "right" });
+  doc.setTextColor(0, 0, 0);
+}
 
-  doc.setTextColor(0);
+function drawLegendPills(doc, y) {
+  const w = doc.internal.pageSize.getWidth();
+  const m = PDF_THEME.margin;
+
+  const pills = [
+    { text: `OK  (< ${HIGH_FOOD_COST_PCT}%)`, color: PDF_THEME.status.ok },
+    { text: `HIGH  (> ${HIGH_FOOD_COST_PCT}%)`, color: PDF_THEME.status.high },
+    { text: "N/A  (no price/cost)", color: PDF_THEME.status.na },
+  ];
+
+  let x = m;
+  const h = 18;
+
+  doc.setFontSize(9);
+  safeSetFont(doc, "bold");
+
+  for (const p of pills) {
+    const tw = doc.getTextWidth(p.text);
+    const bw = tw + 18;
+
+    doc.setFillColor(...p.color);
+    doc.roundedRect(x, y, bw, h, 7, 7, "F");
+
+    doc.setTextColor(255, 255, 255);
+    doc.text(p.text, x + 9, y + 13);
+
+    x += bw + 8;
+    if (x > w - m - 80) break;
+  }
+
+  safeSetFont(doc, "normal");
+  doc.setTextColor(0, 0, 0);
 }
 
 function drawDishIndex(doc, rows) {
@@ -771,46 +1013,64 @@ function drawDishIndex(doc, rows) {
   addTopBar(doc, "Recipe Report", "Dish List (Index)");
 
   const pageW = doc.internal.pageSize.getWidth();
-  const left = 18;
-  const right = 18;
+  const left = PDF_THEME.margin;
+  const right = PDF_THEME.margin;
   const usable = pageW - left - right;
 
+  // legend
+  drawLegendPills(doc, 78);
+
   // widths must sum to `usable`
-  const w0 = 30;
-  const w2 = 90;
-  const w3 = 60;
-  const w4 = 95;
-  const w1 = usable - (w0 + w2 + w3 + w4);
+  const w0 = 30; // #
+  const w2 = 70; // Price
+  const w3 = 80; // Est. Cost
+  const w4 = 80; // Food Cost %
+  const w5 = 65; // Status
+  const w1 = usable - (w0 + w2 + w3 + w4 + w5); // Dish
 
   autoTable(doc, {
     startY: 78,
     margin: { left, right },
     tableWidth: usable, // ✅ lock table width
-
-    head: [["#", "Dish", "Has Recipe", "Lines", "Est. Cost"]],
+  
+    head: [["#", "Dish", "Price", "Est. Cost", "Food Cost %", "Status"]],
     body: rows,
-
-    // ✅ keep head colored, make BODY transparent so watermark can show behind (no overlay)
+  
+    // ✅ keep head colored, make BODY transparent so watermark can show behind
     styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
     headStyles: { fillColor: [25, 118, 210], textColor: 255 },
     bodyStyles: { fillColor: false },
     alternateRowStyles: { fillColor: false },
-
+  
     columnStyles: {
       0: { halign: "left", cellWidth: w0 },
       1: { halign: "left", cellWidth: w1 },
-      2: { halign: "center", cellWidth: w2 },
+      2: { halign: "right", cellWidth: w2 },
       3: { halign: "right", cellWidth: w3 },
       4: { halign: "right", cellWidth: w4 },
+      5: { halign: "center", cellWidth: w5 },
     },
-
+  
     didParseCell: (data) => {
-      if (data.section === "body" && data.column.index === 2) {
+      // ✅ FORCE header alignment to match body alignment
+      if (data.section === "head") {
+        const col = data.column.index;
+        if (col === 2 || col === 3 || col === 4) data.cell.styles.halign = "right";
+        else if (col === 5) data.cell.styles.halign = "center";
+        else data.cell.styles.halign = "left";
+      }
+  
+      // ✅ Status pill coloring in body (your existing behavior)
+      if (data.section === "body" && data.column.index === 5) {
         const v = String(data.cell.raw || "").toUpperCase();
-        if (v === "YES") data.cell.styles.fillColor = [40, 167, 69];
-        if (v === "NO") data.cell.styles.fillColor = [220, 53, 69];
+  
+        if (v === "HIGH") data.cell.styles.fillColor = [220, 53, 69];   // red
+        else if (v === "OK") data.cell.styles.fillColor = [40, 167, 69]; // green
+        else data.cell.styles.fillColor = [108, 117, 125];              // gray
+  
         data.cell.styles.textColor = 255;
         data.cell.styles.fontStyle = "bold";
+        data.cell.styles.halign = "center";
       }
     },
   });
@@ -819,50 +1079,49 @@ function drawDishIndex(doc, rows) {
 async function drawDishPage(doc, dish, index, total) {
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
+  const m = PDF_THEME.margin;
 
   addWatermark(doc, "CONFIDENTIAL");
   addTopBar(doc, "Recipe Report", storeProfile.value?.name || "");
 
   // Title
-  doc.setTextColor(20);
+  doc.setTextColor(...PDF_THEME.gray.text);
   doc.setFontSize(18);
-  doc.setFont(undefined, "bold");
-  doc.text(dish.name || `Menu Item #${dish.id}`, 18, 92);
-  doc.setFont(undefined, "normal");
+  safeSetFont(doc, "bold");
+  doc.text(dish.name || `Menu Item #${dish.id}`, m, 92);
+  safeSetFont(doc, "normal");
 
   // status pill
   const hasRecipe = dish.hasRecipe;
   doc.setFontSize(10);
   doc.setTextColor(255, 255, 255);
-  doc.setFillColor(hasRecipe ? 40 : 220, hasRecipe ? 167 : 53, hasRecipe ? 69 : 69);
-  doc.roundedRect(w - 148, 78, 130, 22, 7, 7, "F");
-  doc.text(hasRecipe ? "HAS RECIPE" : "MISSING RECIPE", w - 83, 93, { align: "center" });
+  const pillColor = hasRecipe ? PDF_THEME.status.ok : PDF_THEME.status.high;
+  doc.setFillColor(...pillColor);
+  doc.roundedRect(w - m - 138, 78, 138, 22, 7, 7, "F");
+  safeSetFont(doc, "bold");
+  doc.text(hasRecipe ? "HAS RECIPE" : "MISSING RECIPE", w - m - 69, 93, { align: "center" });
+  safeSetFont(doc, "normal");
+
+  // Cards row
+  const imgX = m;
+  const imgY = 110;
+  const imgW = 160;
+  const imgH = 124;
 
   // Image card
-  const imgX = 18;
-  const imgY = 110;
-  const imgW = 150;
-  const imgH = 110;
-
-  doc.setFillColor(248, 249, 250);
-  doc.roundedRect(imgX, imgY, imgW, imgH, 14, 14, "F");
+  doc.setFillColor(...PDF_THEME.gray.card);
+  doc.roundedRect(imgX, imgY, imgW, imgH, PDF_THEME.radius, PDF_THEME.radius, "F");
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.roundedRect(imgX, imgY, imgW, imgH, PDF_THEME.radius, PDF_THEME.radius, "S");
 
   const imgUrl = menuItemImageUrl(dish.raw);
   let dishImg = null;
   if (imgUrl) dishImg = await fetchAsDataUrl(imgUrl);
 
   if (dishImg) {
-    try {
-      doc.addImage(dishImg, "JPEG", imgX + 8, imgY + 8, imgW - 16, imgH - 16);
-    } catch {
-      try {
-        doc.addImage(dishImg, "PNG", imgX + 8, imgY + 8, imgW - 16, imgH - 16);
-      } catch {
-        // ignore
-      }
-    }
+    drawImageContain(doc, dishImg, imgX, imgY, imgW, imgH, 10);
   } else {
-    doc.setTextColor(140);
+    doc.setTextColor(...PDF_THEME.gray.muted);
     doc.setFontSize(10);
     doc.text("No Image", imgX + imgW / 2, imgY + imgH / 2 + 4, { align: "center" });
     doc.setTextColor(0);
@@ -871,39 +1130,63 @@ async function drawDishPage(doc, dish, index, total) {
   // Summary card
   const sumX = imgX + imgW + 14;
   const sumY = imgY;
-  const sumW = w - 18 - sumX;
+  const sumW = w - m - sumX;
   const sumH = imgH;
 
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(sumX, sumY, sumW, sumH, 14, 14, "F");
-  doc.setDrawColor(235);
-  doc.roundedRect(sumX, sumY, sumW, sumH, 14, 14, "S");
+  doc.setFillColor(...PDF_THEME.gray.white);
+  doc.roundedRect(sumX, sumY, sumW, sumH, PDF_THEME.radius, PDF_THEME.radius, "F");
+  doc.setDrawColor(...PDF_THEME.gray.line);
+  doc.roundedRect(sumX, sumY, sumW, sumH, PDF_THEME.radius, PDF_THEME.radius, "S");
 
+  // header
   doc.setFontSize(11);
-  doc.setTextColor(25);
-  doc.setFont(undefined, "bold");
-  doc.text("Dish Summary", sumX + 14, sumY + 28);
-  doc.setFont(undefined, "normal");
+  doc.setTextColor(...PDF_THEME.gray.text);
+  safeSetFont(doc, "bold");
+  doc.text("Dish Summary", sumX + 14, sumY + 26);
+  safeSetFont(doc, "normal");
 
+  // small stats
+  doc.setFontSize(9);
+  doc.setTextColor(...PDF_THEME.gray.muted);
+  doc.text(`Lines: ${dish.linesCount}`, sumX + 14, sumY + 46);
+  doc.text(`Costed Lines: ${dish.countedLines}`, sumX + 14, sumY + 60);
+  doc.text(`Skipped (UOM mismatch): ${dish.skippedLines}`, sumX + 14, sumY + 74);
+
+  // pricing & costing (fixed spacing, no overlaps)
+  const priceTxt = dish.price == null ? "-" : fmtMoney(dish.price);
+  const pctTxt = dish.foodCostPct == null ? "-" : `${dish.foodCostPct.toFixed(1)}%`;
+
+  doc.setFontSize(9);
+  doc.text(`Menu Price: ${priceTxt}`, sumX + 14, sumY + 92);
+  doc.text(`Food Cost %: ${pctTxt}`, sumX + 14, sumY + 106);
+
+  doc.setFontSize(15);
+  doc.setTextColor(...PDF_THEME.gray.text);
+  safeSetFont(doc, "bold");
+  doc.text(`Est. Cost: ${fmtMoney(dish.cost)}`, sumX + 14, sumY + 124);
+  safeSetFont(doc, "normal");
+
+  // status pill (inside summary)
+  const s = dish.costStatus?.kind || "na";
+  const statusTxt = dish.costStatus?.label || "N/A";
+  const statusColor = s === "high" ? PDF_THEME.status.high : s === "ok" ? PDF_THEME.status.ok : PDF_THEME.status.na;
+
+  doc.setFillColor(...statusColor);
+  doc.roundedRect(sumX + sumW - 88, sumY + 96, 74, 22, 7, 7, "F");
+  doc.setTextColor(255, 255, 255);
   doc.setFontSize(10);
-  doc.setTextColor(80);
-  doc.text(`Lines: ${dish.linesCount}`, sumX + 14, sumY + 50);
-  doc.text(`Costed Lines: ${dish.countedLines}`, sumX + 14, sumY + 66);
-  doc.text(`Skipped (UOM mismatch): ${dish.skippedLines}`, sumX + 14, sumY + 82);
-
-  doc.setFontSize(16);
-  doc.setTextColor(20);
-  doc.setFont(undefined, "bold");
-  doc.text(`Est. Cost: ${fmtMoney(dish.cost)}`, sumX + 14, sumY + 108);
-  doc.setFont(undefined, "normal");
+  safeSetFont(doc, "bold");
+  doc.text(statusTxt, sumX + sumW - 51, sumY + 111, { align: "center" });
+  safeSetFont(doc, "normal");
+  doc.setTextColor(0, 0, 0);
 
   // Table
-  const startY = 240;
+  const startY = 260;
 
   if (!hasRecipe) {
     doc.setFontSize(12);
-    doc.setTextColor(120);
-    doc.text("No recipe lines for this dish.", 18, startY);
+    doc.setTextColor(...PDF_THEME.gray.muted);
+    doc.text("No recipe lines for this dish.", m, startY);
     doc.setTextColor(0);
   } else {
     const linesArr = (dish.recipe?.lines || []).map((ln) => {
@@ -916,6 +1199,7 @@ async function drawDishPage(doc, dish, index, total) {
       const baseUomId = inv?.base_uom_id ?? null;
 
       let lineCost = null;
+      // keep original behavior here (design only)
       if (avgCost != null && baseUomId != null && Number(baseUomId) === Number(ln.uom_id)) {
         const c = Number(avgCost);
         if (Number.isFinite(c) && Number.isFinite(qty)) lineCost = c * qty;
@@ -931,8 +1215,8 @@ async function drawDishPage(doc, dish, index, total) {
     });
 
     const pageW = doc.internal.pageSize.getWidth();
-    const left = 18;
-    const right = 18;
+    const left = m;
+    const right = m;
     const usable = pageW - left - right;
 
     // widths must sum to `usable`
@@ -946,17 +1230,17 @@ async function drawDishPage(doc, dish, index, total) {
       startY,
       margin: { left, right },
       tableWidth: usable, // ✅ lock table width
-
+    
       head: [["Ingredient", "Qty", "UOM", "Avg Cost", "Line Cost"]],
       body: linesArr,
-
+    
       styles: { fontSize: 9, cellPadding: 6, overflow: "linebreak" },
       headStyles: { fillColor: [111, 66, 193], textColor: 255 },
-
+    
       // ✅ make BODY transparent so watermark shows behind (not over text)
       bodyStyles: { fillColor: false },
       alternateRowStyles: { fillColor: false },
-
+    
       columnStyles: {
         0: { halign: "left", cellWidth: wIng },
         1: { halign: "right", cellWidth: wQty },
@@ -964,38 +1248,50 @@ async function drawDishPage(doc, dish, index, total) {
         3: { halign: "right", cellWidth: wAvg },
         4: { halign: "right", cellWidth: wLine },
       },
+    
+      didParseCell: (data) => {
+        // ✅ FORCE header alignment to match body alignment
+        if (data.section === "head") {
+          const col = data.column.index;
+          if (col === 1 || col === 3 || col === 4) data.cell.styles.halign = "right";
+          else if (col === 2) data.cell.styles.halign = "center";
+          else data.cell.styles.halign = "left";
+        }
+      },
     });
 
     const finalY = doc.lastAutoTable?.finalY || startY + 20;
 
-    doc.setFillColor(248, 249, 250);
-    doc.roundedRect(18, finalY + 14, w - 36, 64, 14, 14, "F");
+    // Note card
+    doc.setFillColor(...PDF_THEME.gray.card);
+    doc.roundedRect(m, finalY + 14, w - m * 2, 64, PDF_THEME.radius, PDF_THEME.radius, "F");
 
     doc.setFontSize(11);
-    doc.setTextColor(25);
-    doc.setFont(undefined, "bold");
-    doc.text("Costing Note", 32, finalY + 38);
-    doc.setFont(undefined, "normal");
+    doc.setTextColor(...PDF_THEME.gray.text);
+    safeSetFont(doc, "bold");
+    doc.text("Costing Note", m + 14, finalY + 38);
+    safeSetFont(doc, "normal");
 
     doc.setFontSize(9);
-    doc.setTextColor(110);
+    doc.setTextColor(...PDF_THEME.gray.muted);
     doc.text(
       "Line costs are calculated only when recipe UOM equals ingredient Base UOM.",
-      32,
+      m + 14,
       finalY + 54
     );
 
     doc.setFontSize(14);
-    doc.setTextColor(20);
-    doc.setFont(undefined, "bold");
-    doc.text(`Total: ${fmtMoney(dish.cost)}`, w - 32, finalY + 48, { align: "right" });
-    doc.setFont(undefined, "normal");
+    doc.setTextColor(...PDF_THEME.gray.text);
+    safeSetFont(doc, "bold");
+    doc.text(`Total: ${fmtMoney(dish.cost)}`, w - m - 14, finalY + 48, { align: "right" });
+    safeSetFont(doc, "normal");
+    doc.setTextColor(0, 0, 0);
   }
 
-  // small counter
-  doc.setTextColor(140);
+  // small counter (top of footer zone)
+  doc.setTextColor(...PDF_THEME.gray.muted);
   doc.setFontSize(9);
-  doc.text(`Dish ${index} of ${total}`, w - 18, h - 52, { align: "right" });
+  doc.text(`Dish ${index} of ${total}`, w - m, h - 52, { align: "right" });
   doc.setTextColor(0);
 }
 
@@ -1009,6 +1305,11 @@ async function exportToPdf() {
       toast.info("No menu items to export (check filters)");
       return;
     }
+
+    // cache logo ONCE (design only)
+    cachedStoreLogoDataUrl = null;
+    const logoUrl = storeLogoUrl(storeProfile.value);
+    if (logoUrl) cachedStoreLogoDataUrl = await fetchAsDataUrl(logoUrl);
 
     const doc = new jsPDF({ unit: "pt", format: "a4" });
 
@@ -1037,16 +1338,23 @@ async function exportToPdf() {
         dishesWithCost += 1;
       }
 
+      const price = getMenuPrice(m);
+      const pct = hasRecipe ? foodCostPct(cost, price) : null;
+      const status = costStatus(pct);
+
       dishes.push({
         id: m.id,
         name: m.name || `Menu Item #${m.id}`,
         raw: m,
+        price,
         recipe: r,
         hasRecipe,
         linesCount,
         cost,
         countedLines,
         skippedLines,
+        foodCostPct: pct,
+        costStatus: status,
       });
     }
 
@@ -1067,13 +1375,18 @@ async function exportToPdf() {
 
     // PAGE 2+: index of all dishes
     doc.addPage();
-    const indexRows = dishes.map((d, i) => [
-      String(i + 1),
-      d.name,
-      d.hasRecipe ? "YES" : "NO",
-      String(d.linesCount || 0),
-      d.hasRecipe ? fmtMoney(d.cost) : "-",
-    ]);
+    const indexRows = dishes.map((d, i) => {
+      const pctTxt = d.foodCostPct == null ? "-" : `${d.foodCostPct.toFixed(1)}%`;
+
+      return [
+        String(i + 1),
+        d.name,
+        d.price == null ? "-" : fmtMoney(d.price),
+        d.hasRecipe ? fmtMoney(d.cost) : "-",
+        d.hasRecipe ? pctTxt : "-",
+        d.hasRecipe ? d.costStatus.label : "N/A",
+      ];
+    });
     drawDishIndex(doc, indexRows);
 
     // After index, start dish pages on a fresh page
@@ -1128,9 +1441,7 @@ watch(
     const opts = uomOptionsForInventory(invId);
     const baseOpt = opts.find((o) => Number(o.value) === base);
 
-    newLine.value.uom_id = baseOpt
-      ? baseOpt.value
-      : (opts[0]?.value ?? null);
+    newLine.value.uom_id = baseOpt ? baseOpt.value : opts[0]?.value ?? null;
   }
 );
 </script>
