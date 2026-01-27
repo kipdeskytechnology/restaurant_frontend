@@ -19,7 +19,7 @@ import {
   deleteExpenseAttachment,
 } from "../../api/expenses";
 
-const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || "http://localhost:8001";
+const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || "https://restaurant.kipdesky.com";
 const fileHref = (u) => (u?.startsWith("http") ? u : `${API_ORIGIN}${u}`);
 
 const route = useRoute();
