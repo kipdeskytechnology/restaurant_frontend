@@ -225,7 +225,7 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
           :class="{ 'menuitem-active': isGroupOpen(['/cash','/shifts','/cash-drawers','/cash-movements']) }"
         >
           <a class="side-nav-link" data-bs-toggle="collapse" href="#sidebarCash" aria-controls="sidebarCash"
-             :aria-expanded="isGroupOpen(['/cash','/shifts','/cash-drawers','/cash-movements']) ? 'true' : 'false'">
+             :aria-expanded="isGroupOpen(['/cash','/shifts','/cash-drawers','/cash-movements', '/cash/expenses']) ? 'true' : 'false'">
             <i class="uil-money-withdraw"></i>
             <span> Cash </span>
             <span class="menu-arrow"></span>
@@ -236,6 +236,7 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
               <li><router-link to="/cash/drawers">Cash Drawers</router-link></li>
               <li><router-link to="/cash/shifts">Shifts</router-link></li>
               <li v-if="can('cash_movements.view')"><router-link to="/cash/movements">Cash Movements</router-link></li>
+              <li v-if="can('cash_expense.view')"><router-link to="/cash/expenses">Expenses</router-link></li>
             </ul>
           </div>
         </li>

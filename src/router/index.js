@@ -26,6 +26,9 @@ const routes = [
   { path: "/cash/drawers", name: "cash-drawers", component: () => import("../views/cash/Drawers.vue") },
   { path: "/cash/movements", name: "cash-movements", component: () => import("../views/cash/Movements.vue") },
 
+  { path: "/cash/expenses", name: "expenses", component: () => import("../views/expenses/Expenses.vue") },
+  { path: "/cash/expenses/:id", name: "expense-view", component: () => import("../views/expenses/ExpenseView.vue"), props: true },
+
   { path: "/menu/categories", name: "menu-categories", component: () => import("../views/menu/Categories.vue") },
   { path: "/menu/items", name: "menu-items", component: () => import("../views/menu/Items.vue") },
   { path: "/menu/modifiers", name: "menu-modifiers", component: () => import("../views/menu/Modifiers.vue") },
