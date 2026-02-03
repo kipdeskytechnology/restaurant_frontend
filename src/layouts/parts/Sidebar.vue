@@ -213,7 +213,8 @@ const helpCta = computed(() => (isSystemAdmin.value ? "Go to System" : "View Pro
               <li><router-link to="/suppliers">Suppliers</router-link></li>
               <li><router-link to="/purchasing/purchase-orders">Purchase Orders</router-link></li>
               <li><router-link to="/purchasing/receipts">Purchase Receipts</router-link></li>
-              <li v-if="can('supplier_prices.view')"><router-link to="/purchasing/supplier-prices">Supplier Prices</router-link></li>
+              <!-- <li v-if="can('supplier_prices.view')"><router-link to="/purchasing/supplier-prices">Supplier Prices</router-link></li> -->
+              <li v-if="can('supplier_prices.view')"><router-link to="/purchasing/stock-intake">Stock Intake</router-link></li>
             </ul>
           </div>
         </li>

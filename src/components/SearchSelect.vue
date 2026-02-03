@@ -1,3 +1,4 @@
+<!-- src\components\SearchSelect.vue -->
 <template>
   <div class="searchselect" :class="{ disabled }" ref="root" @keydown.stop.prevent="onKeydown" tabindex="0">
     <button
@@ -180,12 +181,16 @@ watch(open, (v) => { if (v) nextTick(() => searchEl.value?.focus()); });
 .searchselect .truncate { max-width: 85%; display: inline-block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .searchselect .dropdown-panel {
-  position: absolute; z-index: 1060; left: 0; right: 0; top: calc(100% + 4px);
-  display: flex; flex-direction: column;
-  max-height: 280px; overflow: hidden;
-  background-color: var(--bs-body-bg);
-  color: var(--bs-body-color);
-  border-color: var(--bs-border-color);
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow: hidden;
 }
 
 .searchselect .dropdown-panel .searchbar {
