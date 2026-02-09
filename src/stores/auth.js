@@ -3,21 +3,26 @@ import { defineStore } from "pinia";
 import http from "../api/http";
 import { jwtDecode } from "jwt-decode";
 
+const readAccessToken = () =>
+  localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
+
+const readRefreshToken = () =>
+  localStorage.getItem("refresh_token") || sessionStorage.getItem("refresh_token");
+
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     me: null,
+    accessToken: readAccessToken(),
+    refreshToken: readRefreshToken(),
   }),
 
   getters: {
-    isAuthed: () =>
-      !!localStorage.getItem("access_token") || !!sessionStorage.getItem("access_token"),
+    isAuthed: (s) => !!s.accessToken,
 
-    claims: () => {
-      const t =
-        localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
-      if (!t) return null;
+    claims: (s) => {
+      if (!s.accessToken) return null;
       try {
-        return jwtDecode(t);
+        return jwtDecode(s.accessToken);
       } catch {
         return null;
       }
@@ -29,18 +34,37 @@ export const useAuthStore = defineStore("auth", {
   },
 
   actions: {
-    async login(identifier, password, remember = true) {
-      const res = await http.post("/auth/login", { identifier, password });
-
+    setTokens(access, refresh, remember = true) {
       const store = remember ? localStorage : sessionStorage;
       const other = remember ? sessionStorage : localStorage;
 
-      // clear the other storage so you don't get mixed tokens
       other.removeItem("access_token");
       other.removeItem("refresh_token");
 
-      store.setItem("access_token", res.data.access_token);
-      store.setItem("refresh_token", res.data.refresh_token);
+      store.setItem("access_token", access);
+      store.setItem("refresh_token", refresh);
+
+      // ✅ reactive
+      this.accessToken = access;
+      this.refreshToken = refresh;
+    },
+
+    clearTokens() {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      sessionStorage.removeItem("access_token");
+      sessionStorage.removeItem("refresh_token");
+
+      // ✅ reactive
+      this.accessToken = null;
+      this.refreshToken = null;
+      this.me = null;
+    },
+
+    async login(identifier, password, remember = true) {
+      const res = await http.post("/auth/login", { identifier, password });
+
+      this.setTokens(res.data.access_token, res.data.refresh_token, remember);
 
       await this.fetchMe();
       return res.data;
@@ -53,31 +77,12 @@ export const useAuthStore = defineStore("auth", {
     },
 
     async logout() {
-      const rt =
-        localStorage.getItem("refresh_token") || sessionStorage.getItem("refresh_token");
-
+      const rt = this.refreshToken;
       try {
         if (rt) await http.post("/auth/logout", { refresh_token: rt });
       } catch (_) {}
 
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("refresh_token");
-      sessionStorage.removeItem("access_token");
-      sessionStorage.removeItem("refresh_token");
-
-      this.me = null;
+      this.clearTokens();
     },
-
-    async changePassword(payload) {
-      return http.post("/auth/change-password", payload);
-    },
-
-    async requestPasswordReset(identifier) {
-      return http.post("/auth/forgot-password", { identifier });
-    },
-    
-    async resetPassword(token, new_password) {
-      return http.post("/auth/reset-password", { token, new_password });
-    }
   },
 });

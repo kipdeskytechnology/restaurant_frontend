@@ -22,6 +22,20 @@ function clearTokens() {
   sessionStorage.removeItem("refresh_token");
 }
 
+async function syncAuthTokens(newAccess, newRefresh) {
+  const mod = await import("../stores/auth");
+  const auth = mod.useAuthStore();
+  const remember = tokenStore() === localStorage;
+  auth.setTokens(newAccess, newRefresh, remember);
+}
+
+async function clearAuthStoreTokens() {
+  const mod = await import("../stores/auth");
+  const auth = mod.useAuthStore();
+  auth.clearTokens(); // clears storage + reactive state
+}
+
+
 let isRefreshing = false;
 let queue = [];
 
@@ -45,9 +59,9 @@ http.interceptors.response.use(
     const original = err.config;
     const status = err.response?.status;
 
-    // ✅ do not refresh if the request IS the refresh call
     if (original?.url?.includes("/auth/refresh")) {
       clearTokens();
+      await clearAuthStoreTokens();
       return Promise.reject(err);
     }
 
@@ -81,9 +95,11 @@ http.interceptors.response.use(
         const store = tokenStore();
         store.setItem("access_token", newAccess);
         store.setItem("refresh_token", newRefresh);
-
+        await syncAuthTokens(newAccess, newRefresh);
+        
         http.defaults.headers.common.Authorization = `Bearer ${newAccess}`;
         processQueue(null, newAccess);
+
 
         original.headers = original.headers || {};
         original.headers.Authorization = `Bearer ${newAccess}`;
@@ -91,7 +107,7 @@ http.interceptors.response.use(
       } catch (refreshErr) {
         processQueue(refreshErr, null);
         clearTokens();
-        // ✅ optionally: window.location.href = "/login";
+        await clearAuthStoreTokens();
         return Promise.reject(refreshErr);
       } finally {
         isRefreshing = false;
