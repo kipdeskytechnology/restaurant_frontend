@@ -167,3 +167,111 @@ async function submit() {
     </transition>
   </div>
 </template>
+
+<style scoped>
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.35);
+  --bg-top: #f7f7fb;
+  --bg-bot: #eef1f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --glass-bg: rgba(20, 22, 27, 0.55);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --bg-top: #0f1117;
+    --bg-bot: #0b0d12;
+  }
+}
+
+/* ==== Card sizing to fit viewport ==== */
+.auth-card {
+  max-width: 960px;
+  width: 100%;
+  max-height: calc(100svh - 2rem); /* keep whole card on screen */
+  border-radius: 1.25rem;
+}
+
+/* Hide brand pane on short screens to save vertical space */
+@media (max-height: 720px) {
+  .brand-pane { display: none !important; }
+  .auth-card { max-width: 560px; } /* narrower when brand pane hidden */
+}
+
+/* Compact paddings for shorter devices */
+@media (max-height: 640px) {
+  .card-body { padding: 1.25rem !important; }
+}
+
+/* ==== Glass effect and subtle micro-interactions ==== */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: saturate(140%) blur(14px);
+  border: 1px solid var(--glass-border);
+}
+
+.input-group-text,
+.form-control {
+  font-size: 0.875rem; /* 14px */
+}
+.form-control,
+.btn { border-radius: 0.8rem; }
+
+.form-control:focus {
+  box-shadow: 0 0 0 0.25rem rgba(99, 102, 241, 0.15);
+}
+
+/* Lift effect on buttons */
+.lift { transition: transform .08s ease, box-shadow .2s ease; }
+.lift:hover { transform: translateY(-2px); }
+.lift:active { transform: translateY(0); }
+
+.btn-primary {
+  border: 0;
+  box-shadow: 0 10px 28px rgba(13, 110, 253, 0.28);
+}
+
+/* Input with leading icon */
+.input-group.has-icon .input-group-text { border-right: 0; }
+.input-group.has-icon .form-control { border-left: 0; }
+
+/* ==== Loading overlay ==== */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(6px);
+  border-radius: inherit;
+  z-index: 5;
+}
+@media (prefers-color-scheme: dark) {
+  .loading-overlay { background: rgba(0,0,0,0.45); }
+}
+
+/* ==== Animations ==== */
+@keyframes bgMove {
+  0%   { background-position: 0% 0%, 100% 0%, 0% 0%; }
+  100% { background-position: 20% 10%, 80% 20%, 0% 100%; }
+}
+
+.slide-fade-enter-active { transition: opacity .35s ease, transform .35s ease; }
+.slide-fade-enter-from { opacity: 0; transform: translateY(16px) scale(0.98); }
+
+.fade-enter-active, .fade-leave-active { transition: opacity .2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* Utility */
+.fw-medium { font-weight: 600; }
+.shadow-xl { box-shadow: 0 20px 70px rgba(0, 0, 0, 0.18); }
+
+.brand-pane {
+  background:
+    radial-gradient(600px 300px at 10% 110%, rgba(99, 102, 241, 0.25), transparent 60%),
+    radial-gradient(800px 400px at 100% 0%, rgba(16, 185, 129, 0.2), transparent 50%),
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(16, 185, 129, 0.12));
+  border-right: 1px solid var(--glass-border);
+}
+
+.brand-logo { height: 50px; width: auto; }
+</style>

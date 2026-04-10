@@ -70,6 +70,18 @@ export const useAuthStore = defineStore("auth", {
       return res.data;
     },
 
+    async requestPasswordReset(identifier) {
+      await http.post("/auth/forgot-password", { identifier });
+    },
+
+    async resetPassword(token, newPassword) {
+      await http.post("/auth/reset-password", { token, new_password: newPassword });
+    },
+
+    async changePassword(payload) {
+      await http.post("/auth/change-password", payload);
+    },
+
     async fetchMe() {
       const res = await http.get("/auth/me");
       this.me = res.data;

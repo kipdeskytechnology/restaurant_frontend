@@ -36,7 +36,7 @@
                   <label class="form-label fw-medium">New password</label>
                   <div class="input-group input-group-lg has-icon">
                     <span class="input-group-text"><i class="ri-lock-2-line"></i></span>
-                    <input v-model="newPassword" class="form-control" :type="showPw ? 'text' : 'password'" required minlength="8" />
+                    <input v-model="newPassword" class="form-control" :type="showPw ? 'text' : 'password'" required minlength="4" />
                     <button type="button" class="btn btn-light" @click="showPw = !showPw">
                       <i :class="showPw ? 'ri-eye-off-line' : 'ri-eye-line'"></i>
                     </button>
