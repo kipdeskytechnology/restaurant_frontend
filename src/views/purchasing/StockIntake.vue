@@ -853,7 +853,7 @@ onMounted(async () => {
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Received At (optional)</label>
+                <label class="form-label">Received At</label>
                 <input v-model="createForm.received_at" type="datetime-local" class="form-control" :disabled="saving" />
               </div>
 

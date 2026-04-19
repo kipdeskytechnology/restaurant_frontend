@@ -44,11 +44,12 @@ const routes = [
   // Purchasing
   { path: "/suppliers", name: "suppliers", component: () => import("../views/purchasing/Suppliers.vue") },
   { path: "/purchasing/purchase-orders", name: "purchase-orders", component: () => import("../views/purchasing/PurchaseOrders.vue") },
+  { path: "/purchasing/purchase-orders/new", name: "purchase-order-create", component: () => import("../views/purchasing/PurchaseOrderCreate.vue") },
   { path: "/purchasing/purchase-orders/:id", name: "purchase-order-view", component: () => import("../views/purchasing/PurchaseOrderView.vue"), props: true },
   { path: "/purchasing/receipts", name: "purchase-receipts", component: () => import("../views/purchasing/Receipts.vue") },
   { path: "/purchasing/receipts/:id", name: "purchase-receipt-view", component: () => import("../views/purchasing/ReceiptView.vue"), props: true },
   { path: "/purchasing/supplier-prices", name: "supplier-prices", component: () => import("../views/purchasing/SupplierPrices.vue") },
-  { path: "/purchasing/stock-intake", name: "supplier-prices", component: () => import("../views/purchasing/StockIntake.vue") },
+  { path: "/purchasing/stock-intake", name: "stock-intake", component: () => import("../views/purchasing/StockIntake.vue") },
 
   { path: "/pos/new-order", name: "pos-new-order", component: () => import("../views/pos/NewOrder.vue") },
   { path: "/pos/order/:id", name: "pos-order", component: () => import("../views/pos/Order.vue"), props: true },

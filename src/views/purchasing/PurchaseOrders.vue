@@ -1,3 +1,4 @@
+<!-- src\views\purchasing\PurchaseOrders.vue -->
 <script setup>
 import { ref, onMounted, watch, computed } from "vue";
 import { useRouter } from "vue-router";
@@ -63,7 +64,13 @@ async function load() {
 }
 
 function openPO(poId) {
-  router.push({ name: "purchase-order-view", params: { id: poId } });
+  const n = Number(poId);
+  if (!Number.isInteger(n) || n <= 0) {
+    toast.error("Invalid purchase order id");
+    return;
+  }
+
+  router.push({ name: "purchase-order-view", params: { id: n } });
 }
 
 function statusBadge(st) {

@@ -1,3 +1,4 @@
+<!-- src\views\system\StoreProfile.vue -->
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
@@ -65,6 +66,7 @@ const form = ref({
   store_type: "",
   motto: "",
   notes: "",
+  require_recipe_for_orders: true,
 });
 
 function fillForm(s) {
@@ -89,6 +91,7 @@ function fillForm(s) {
     store_type: s.store_type || "",
     motto: s.motto || "",
     notes: s.notes || "",
+    require_recipe_for_orders: s.require_recipe_for_orders ?? true,
   };
 
   logoPreview.value = s.logo_url ? resolveLogoUrl(s.logo_url) : "";
@@ -312,6 +315,21 @@ async function uploadLogoOnly() {
               <div class="col-12">
                 <label class="form-label">Notes</label>
                 <textarea v-model="form.notes" class="form-control" rows="3"></textarea>
+              </div>
+
+              <div class="col-md-6 d-flex align-items-center">
+                <div class="form-check form-switch">
+                  <input 
+                    class="form-check-input" 
+                    type="checkbox" 
+                    id="requireRecipeSwitch" 
+                    v-model="form.require_recipe_for_orders"
+                  />
+                  <label class="form-check-label" for="requireRecipeSwitch">
+                    Require recipes for orders
+                  </label>
+                </div>
+                <small class="text-muted ms-2">(if off, missing recipes are ignored)</small>
               </div>
             </div>
     

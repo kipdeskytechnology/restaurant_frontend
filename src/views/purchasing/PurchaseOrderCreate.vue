@@ -1,7 +1,7 @@
-<!-- src\views\purchasing\PurchaseOrderView.vue -->
+<!-- src/views/purchasing/PurchaseOrderCreate.vue -->
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRouter } from "vue-router";
 import DefaultLayout from "../../layouts/DefaultLayout.vue";
 import { useToast } from "vue-toastification";
 
@@ -9,26 +9,16 @@ import { listInventoryItems } from "../../api/inventory";
 import { listUoms } from "../../api/lookups";
 import {
   listSuppliers,
-  getPurchaseOrder,
-  updatePurchaseOrder,
+  createPurchaseOrder,
   replacePurchaseOrderItems,
-  sendPurchaseOrder,
-  cancelPurchaseOrder,
 } from "../../api/purchasing";
 import http from "../../api/http";
 
 const toast = useToast();
-const route = useRoute();
 const router = useRouter();
-const poId = computed(() => {
-  const raw = route.params.id;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
-});
 
 const loading = ref(true);
 const saving = ref(false);
-const actioning = ref(false);
 
 const suppliers = ref([]);
 const itemsMaster = ref([]);
@@ -56,10 +46,8 @@ const itemLabelById = computed(() => {
 const form = ref({
   supplier_id: "",
   outlet_id: "",
-  status: "",
-  po_number: "",
   note: "",
-  items: [], // { inventory_item_id, qty, uom_id, unit_cost }
+  items: [],
 });
 
 function normalizeNumber(v) {
@@ -74,21 +62,9 @@ function money(v) {
   return n.toFixed(2);
 }
 
-const canEdit = computed(() => String(form.value.status || "").toUpperCase() === "DRAFT");
-
-function statusBadgeClass(st) {
-  const s = String(st || "").toUpperCase();
-  if (s === "RECEIVED") return "bg-success";
-  if (s === "PARTIAL") return "bg-warning";
-  if (s === "SENT") return "bg-primary";
-  if (s === "CANCELLED") return "bg-danger";
-  return "bg-secondary";
-}
-
 async function loadLookups() {
   const [sup, inv, uomList, outletsData] = await Promise.all([
     listSuppliers({ active: "1", limit: 500 }),
-    // safe filters
     listInventoryItems({ limit: 500, active: "all", track: "all" }),
     listUoms(),
     http.get("/system/outlets").then((r) => r.data),
@@ -100,41 +76,12 @@ async function loadLookups() {
   outlets.value = Array.isArray(outletsData) ? outletsData : [];
 }
 
-async function loadPO() {
-  if (poId.value == null) {
-    throw new Error("Invalid purchase order id");
-  }
-
-  const data = await getPurchaseOrder(poId.value);
-
-  form.value = {
-    supplier_id: data?.supplier_id ?? "",
-    outlet_id: data?.outlet_id ?? "",
-    status: data?.status ?? "",
-    po_number: data?.po_number ?? "",
-    note: data?.note ?? "",
-    items: (data?.items || []).map((x) => ({
-      inventory_item_id: x.inventory_item_id,
-      qty: x.qty,
-      uom_id: x.uom_id,
-      unit_cost: x.unit_cost,
-    })),
-  };
-}
-
 async function init() {
   loading.value = true;
   try {
-    if (poId.value == null) {
-      toast.error("Invalid purchase order route");
-      router.replace("/purchasing/purchase-orders");
-      return;
-    }
-
     await loadLookups();
-    await loadPO();
   } catch (e) {
-    toast.error(e?.response?.data?.detail || e?.message || "Failed to load purchase order");
+    toast.error(e?.response?.data?.detail || e?.message || "Failed to load form");
   } finally {
     loading.value = false;
   }
@@ -187,7 +134,6 @@ function addLineToForm() {
   if (!payload.uom_id) return toast.error("UOM is required");
   if (payload.unit_cost == null || payload.unit_cost < 0) return toast.error("Unit cost must be >= 0");
 
-  // backend forbids duplicates
   if (form.value.items.some((x) => Number(x.inventory_item_id) === payload.inventory_item_id)) {
     return toast.error("This item already exists in the PO lines");
   }
@@ -203,13 +149,20 @@ function removeLine(idx) {
 async function save() {
   saving.value = true;
   try {
+    if (!form.value.outlet_id) return toast.error("Outlet is required");
     if (!form.value.supplier_id) return toast.error("Supplier is required");
     if (!form.value.items.length) return toast.error("Add at least 1 item");
 
-    await updatePurchaseOrder(poId.value, {
+    const created = await createPurchaseOrder({
+      outlet_id: Number(form.value.outlet_id),
       supplier_id: Number(form.value.supplier_id),
       note: form.value.note?.trim() || null,
     });
+
+    const poId = Number(created?.id);
+    if (!Number.isInteger(poId) || poId <= 0) {
+      throw new Error("Created purchase order id is invalid");
+    }
 
     const itemsPayload = form.value.items.map((x) => ({
       inventory_item_id: Number(x.inventory_item_id),
@@ -218,40 +171,14 @@ async function save() {
       unit_cost: normalizeNumber(x.unit_cost),
     }));
 
-    await replacePurchaseOrderItems(poId.value, itemsPayload);
+    await replacePurchaseOrderItems(poId, itemsPayload);
 
-    toast.success("Saved");
-    await loadPO();
+    toast.success("Purchase order created");
+    router.replace({ name: "purchase-order-view", params: { id: poId } });
   } catch (e) {
-    toast.error(e?.response?.data?.detail || e?.message || "Failed to save purchase order");
+    toast.error(e?.response?.data?.detail || e?.message || "Failed to create purchase order");
   } finally {
     saving.value = false;
-  }
-}
-
-async function doSend() {
-  actioning.value = true;
-  try {
-    await sendPurchaseOrder(poId.value);
-    toast.success("Sent");
-    await loadPO();
-  } catch (e) {
-    toast.error(e?.response?.data?.detail || e?.message || "Failed to send");
-  } finally {
-    actioning.value = false;
-  }
-}
-
-async function doCancel() {
-  actioning.value = true;
-  try {
-    await cancelPurchaseOrder(poId.value);
-    toast.success("Cancelled");
-    await loadPO();
-  } catch (e) {
-    toast.error(e?.response?.data?.detail || e?.message || "Failed to cancel");
-  } finally {
-    actioning.value = false;
   }
 }
 
@@ -262,25 +189,15 @@ onMounted(init);
   <DefaultLayout>
     <div class="page-title-box d-flex align-items-center justify-content-between" style="zoom: 80%;">
       <div class="d-flex align-items-center gap-2">
-        <h4 class="page-title mb-0">Purchase Order</h4>
-        <span class="badge" :class="statusBadgeClass(form.status)">{{ form.status }}</span>
-        <span class="text-muted ms-2">{{ form.po_number }}</span>
+        <h4 class="page-title mb-0">New Purchase Order</h4>
       </div>
 
       <div class="d-flex gap-2">
         <button class="btn btn-light" @click="router.back()">Back</button>
 
-        <button class="btn btn-primary" :disabled="loading || saving || !canEdit" @click="save">
+        <button class="btn btn-primary" :disabled="loading || saving" @click="save">
           <span v-if="saving" class="spinner-border spinner-border-sm me-1"></span>
           Save
-        </button>
-
-        <button class="btn btn-soft-primary" :disabled="loading || actioning || !canEdit" @click="doSend">
-          Send
-        </button>
-
-        <button class="btn btn-soft-danger" :disabled="loading || actioning" @click="doCancel">
-          Cancel
         </button>
       </div>
     </div>
@@ -294,12 +211,15 @@ onMounted(init);
         <div class="row g-3">
           <div class="col-md-4">
             <label class="form-label">Outlet</label>
-            <input class="form-control" :value="outletNameById.get(form.outlet_id) || `Outlet #${form.outlet_id}`" disabled />
+            <select class="form-select" v-model="form.outlet_id">
+              <option value="">Select outlet</option>
+              <option v-for="o in outlets" :key="o.id" :value="o.id">{{ o.name }}</option>
+            </select>
           </div>
 
           <div class="col-md-4">
             <label class="form-label">Supplier</label>
-            <select class="form-select" v-model="form.supplier_id" :disabled="!canEdit">
+            <select class="form-select" v-model="form.supplier_id">
               <option value="">Select supplier</option>
               <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
@@ -307,12 +227,12 @@ onMounted(init);
 
           <div class="col-md-4">
             <label class="form-label">Status</label>
-            <input class="form-control" :value="form.status" disabled />
+            <input class="form-control" value="DRAFT" disabled />
           </div>
 
           <div class="col-12">
             <label class="form-label">Note</label>
-            <textarea class="form-control" rows="2" v-model="form.note" :disabled="!canEdit"></textarea>
+            <textarea class="form-control" rows="2" v-model="form.note"></textarea>
           </div>
         </div>
 
@@ -320,7 +240,7 @@ onMounted(init);
 
         <div class="d-flex justify-content-between align-items-center mb-2">
           <h5 class="mb-0">Items</h5>
-          <button class="btn btn-sm btn-secondary" :disabled="!canEdit" @click="prepareAddLine">
+          <button class="btn btn-sm btn-secondary" @click="prepareAddLine">
             Add Line
           </button>
         </div>
@@ -349,13 +269,7 @@ onMounted(init);
                 <td>{{ itemLabelById.get(ln.inventory_item_id) || `Item #${ln.inventory_item_id}` }}</td>
 
                 <td>
-                  <input
-                    class="form-control form-control-sm"
-                    type="number"
-                    step="0.000001"
-                    v-model="ln.qty"
-                    :disabled="!canEdit"
-                  />
+                  <input class="form-control form-control-sm" type="number" step="0.000001" v-model="ln.qty" />
                 </td>
 
                 <td>
@@ -365,13 +279,7 @@ onMounted(init);
                 </td>
 
                 <td>
-                  <input
-                    class="form-control form-control-sm"
-                    type="number"
-                    step="0.0001"
-                    v-model="ln.unit_cost"
-                    :disabled="!canEdit"
-                  />
+                  <input class="form-control form-control-sm" type="number" step="0.0001" v-model="ln.unit_cost" />
                 </td>
 
                 <td class="text-end">
@@ -379,7 +287,7 @@ onMounted(init);
                 </td>
 
                 <td class="text-end">
-                  <button class="btn btn-sm btn-soft-danger" :disabled="!canEdit" @click="removeLine(idx)">
+                  <button class="btn btn-sm btn-soft-danger" @click="removeLine(idx)">
                     Remove
                   </button>
                 </td>
@@ -387,11 +295,9 @@ onMounted(init);
             </tbody>
           </table>
         </div>
-
       </div>
     </div>
 
-    <!-- Add Line Modal -->
     <div class="modal fade" id="addLineModal" tabindex="-1" role="dialog" aria-hidden="true" style="zoom: 80%;">
       <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content">
@@ -423,11 +329,7 @@ onMounted(init);
 
               <div class="col-md-6">
                 <label class="form-label">UOM</label>
-                <input
-                  class="form-control"
-                  :value="uomLabelById.get(newLine.uom_id) || newLine.uom_id"
-                  disabled
-                />
+                <input class="form-control" :value="uomLabelById.get(newLine.uom_id) || newLine.uom_id" disabled />
               </div>
             </div>
 
