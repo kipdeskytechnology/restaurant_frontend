@@ -29,6 +29,31 @@ export const updateMenuItem = (id, payload) =>
 export const deleteMenuItem = (id) =>
   http.delete(`${base}/items/${id}`).then((r) => r.data);
 
+// Bulk operations
+export const bulkSetAvailability = (itemIds, isAvailable) =>
+  http.post(`${base}/items/bulk-availability`, {
+    item_ids: itemIds,
+    is_available: !!isAvailable,
+  }).then((r) => r.data);
+
+export const bulkUpdatePrice = (itemIds, mode, value, roundTo = null) =>
+  http.post(`${base}/items/bulk-price`, {
+    item_ids: itemIds,
+    mode,
+    value,
+    round_to: roundTo,
+  }).then((r) => r.data);
+
+export const bulkSetCategory = (itemIds, categoryId) =>
+  http.post(`${base}/items/bulk-category`, {
+    item_ids: itemIds,
+    category_id: categoryId,
+  }).then((r) => r.data);
+
+// Menu Overview (visual manager)
+export const getMenuOverview = (params = {}) =>
+  http.get(`${base}/overview`, { params }).then((r) => r.data);
+
 // Item Image
 export const uploadMenuItemImage = (itemId, file) => {
   const fd = new FormData();

@@ -12,3 +12,6 @@ export const updateDiscount = (id, payload) =>
 
 export const toggleDiscount = (id) =>
   http.post(`/setup/discounts/${id}/toggle`).then((r) => r.data);
+
+export const deleteDiscount = (id) =>
+  http.delete(`/setup/discounts/${id}`).then((r) => r.data);

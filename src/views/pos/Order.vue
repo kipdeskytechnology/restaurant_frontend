@@ -11,6 +11,7 @@ import {
   holdOrder,
   reopenOrder,
   cancelOrder,
+  voidOrder,
   payOrder,
   listOrderDiscounts,
   applyOrderDiscount,
@@ -386,6 +387,44 @@ async function doCancel() {
   });
 }
 
+// ---------- Void (paid order reversal) ----------
+// Separate modal because we need a free-text reason and the restock toggle —
+// the generic confirm modal only takes a body string.
+const voidReason = ref("");
+const voidRestock = ref(true);
+let voidModalInstance = null;
+
+function openVoidModal() {
+  voidReason.value = "";
+  voidRestock.value = true;
+  const el = document.getElementById("voidOrderModal");
+  if (!el) return;
+  if (!voidModalInstance) {
+    voidModalInstance = window.bootstrap ? new window.bootstrap.Modal(el) : null;
+  }
+  voidModalInstance?.show();
+}
+
+async function submitVoid() {
+  const reason = (voidReason.value || "").trim();
+  if (!reason) {
+    showModal("Reason required", "Enter a reason before voiding a paid order.");
+    return;
+  }
+  saving.value = true;
+  try {
+    order.value = await voidOrder(order.value.id, {
+      reason,
+      restock: voidRestock.value,
+    });
+    voidModalInstance?.hide();
+  } catch (e) {
+    showModal("Error", e?.response?.data?.detail || e?.message || "Failed to void order");
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function doPay() {
   showConfirm("Pay order", `Mark this order as PAID? Total: ${cartTotal.value}`, async () => {
     saving.value = true;
@@ -443,7 +482,7 @@ watch(
 
       <div class="d-flex gap-2">
         <router-link class="btn btn-light" to="/orders">Orders</router-link>
-        <router-link class="btn btn-primary" to="/pos/new-order">New Order</router-link>
+        <router-link class="btn btn-primary" to="/pos/v2/new-order">New Order</router-link>
       </div>
     </div>
 
@@ -599,6 +638,94 @@ watch(
               </button>
             </div>
 
+            <!-- Void only appears for already-paid orders. v-can gates the
+                 button on 'orders.void' so only managers/admins see it
+                 (the directive hides it for users without the permission). -->
+            <div
+              v-if="order && order.status === 'PAID' && !order.voided_at"
+              class="d-flex gap-2 mt-2"
+            >
+              <button
+                v-can="'orders.void'"
+                class="btn btn-danger w-100"
+                :disabled="saving"
+                @click="openVoidModal"
+              >
+                <i class="ri-close-circle-line me-1"></i>
+                Void Paid Order
+              </button>
+            </div>
+
+            <div
+              v-if="order && order.voided_at"
+              class="alert alert-warning mt-2 mb-0 py-2 px-3 small"
+            >
+              <i class="ri-error-warning-line me-1"></i>
+              Voided{{ order.void_reason ? ` — ${order.void_reason}` : '' }}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Void Order Modal: paid-order reversal needs a reason and an opt-out
+         on the auto-restock (e.g. comp meal — food was eaten). -->
+    <div class="modal fade" id="voidOrderModal" tabindex="-1" role="dialog" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h4 class="modal-title">
+              <i class="ri-close-circle-line text-danger me-1"></i>
+              Void paid order
+            </h4>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-hidden="true"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted">
+              This reverses a completed sale. Cash payments are backed out of
+              the till, inventory consumption is reversed (unless you uncheck
+              below), and the order is marked CANCELLED. This cannot be undone.
+            </p>
+
+            <div class="mb-3">
+              <label for="voidReasonInput" class="form-label">Reason <span class="text-danger">*</span></label>
+              <textarea
+                id="voidReasonInput"
+                v-model="voidReason"
+                class="form-control"
+                rows="3"
+                placeholder="e.g. Customer complaint — wrong order delivered"
+                maxlength="500"
+              ></textarea>
+              <div class="form-text">Required — appears on void reports.</div>
+            </div>
+
+            <div class="form-check mb-3">
+              <input
+                id="voidRestockInput"
+                v-model="voidRestock"
+                class="form-check-input"
+                type="checkbox"
+              />
+              <label class="form-check-label" for="voidRestockInput">
+                Restock inventory
+              </label>
+              <div class="form-text">
+                Leave checked for normal voids. Uncheck for comp meals or
+                spoiled items where stock should not return to on-hand.
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2">
+              <button type="button" class="btn btn-light" data-bs-dismiss="modal" :disabled="saving">
+                Close
+              </button>
+              <button type="button" class="btn btn-danger" :disabled="saving" @click="submitVoid">
+                <span v-if="saving" class="spinner-border spinner-border-sm me-1"></span>
+                {{ saving ? 'Voiding…' : 'Void order' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>

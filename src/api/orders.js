@@ -22,8 +22,19 @@ export const reopenOrder = (orderId) =>
 export const cancelOrder = (orderId) =>
   http.post(`${base}/orders/${orderId}/cancel`).then((r) => r.data);
 
+export const voidOrder = (orderId, payload = {}) =>
+  http.post(`${base}/orders/${orderId}/void`, payload).then((r) => r.data);
+
 export const payOrder = (orderId, payload = {}) =>
   http.post(`${base}/orders/${orderId}/pay`, payload).then((r) => r.data);
+
+export const splitPayOrder = (orderId, tenders) =>
+  http.post(`${base}/orders/${orderId}/split-pay`, { tenders }).then((r) => r.data);
+
+export const sendOrderToKitchen = (orderId, lineIds = null) =>
+  http
+    .post(`${base}/orders/${orderId}/send-to-kitchen`, { line_ids: lineIds })
+    .then((r) => r.data);
 
 // Lines
 export const addOrderLine = (orderId, payload) =>
@@ -61,3 +72,8 @@ export const addLineModifier = (lineId, modifierOptionId) =>
 
 export const deleteLineModifier = (lineModifierId) =>
   http.delete(`${base}/orders/line-modifiers/${lineModifierId}`).then((r) => r.data);
+
+// Offline-POS sync: returns orders/lines/payments/etc. updated since `since`
+// (ISO 8601). Used by an offline-capable client to pull deltas after reconnecting.
+export const getOrderSyncChanges = (params = {}) =>
+  http.get(`${base}/orders/sync/changes`, { params }).then((r) => r.data);

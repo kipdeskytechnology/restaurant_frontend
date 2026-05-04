@@ -40,6 +40,9 @@ export const createInventoryItem = (payload) =>
 export const updateInventoryItem = (id, payload) =>
   http.put(`${base}/items/${id}`, payload).then((r) => r.data);
 
+export const deleteInventoryItem = (id) =>
+  http.delete(`${base}/items/${id}`).then((r) => r.data);
+
 // Stock + Ledger
 export const listStockBalances = (params = {}) =>
   http.get(`${base}/stock`, { params: clampLimit(params, 500) }).then((r) => r.data);
@@ -49,6 +52,10 @@ export const listStockLedger = (params = {}) =>
 
 export const adjustStock = (payload) =>
   http.post(`${base}/stock/adjust`, payload).then((r) => r.data);
+
+// Stock health (dashboard)
+export const getStockHealth = (params = {}) =>
+  http.get(`${base}/stock/health`, { params }).then((r) => r.data);
 
 // Audits
 export const listInventoryAudits = (params = {}) =>

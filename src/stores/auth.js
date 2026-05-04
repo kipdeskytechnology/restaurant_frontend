@@ -2,6 +2,7 @@
 import { defineStore } from "pinia";
 import http from "../api/http";
 import { jwtDecode } from "jwt-decode";
+import { buildCan } from "../config/permissions";
 
 const readAccessToken = () =>
   localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
@@ -31,6 +32,10 @@ export const useAuthStore = defineStore("auth", {
     permissions: (s) => new Set(s.me?.permissions || []),
     hasPerm: (s) => (code) => (s.me?.permissions || []).includes(code),
     hasRole: (s) => (roleName) => (s.me?.roles || []).includes(roleName),
+
+    // Smart permission check: handles :/. interchangeably, treats
+    // <resource>:manage as implying <resource>:read, and bypasses for admins.
+    can: (s) => buildCan(s.me),
   },
 
   actions: {

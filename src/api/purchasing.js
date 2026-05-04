@@ -77,6 +77,9 @@ export const createSupplier = (payload) =>
 export const updateSupplier = (id, payload) =>
   http.put(`${base}/suppliers/${id}`, payload).then((r) => r.data);
 
+export const deleteSupplier = (id) =>
+  http.delete(`${base}/suppliers/${id}`).then((r) => r.data);
+
 /* -------------------- SUPPLIER PRICE LOOKUP -------------------- */
 
 export const lookupSupplierPrice = (params) =>
@@ -104,6 +107,11 @@ export const sendPurchaseOrder = (id) =>
 
 export const cancelPurchaseOrder = (id) =>
   http.post(`${base}/orders/${id}/cancel`).then((r) => r.data);
+
+// Auto-PO suggestions: read-only; client edits then submits via the existing
+// createPurchaseOrder + replacePurchaseOrderItems endpoints.
+export const getPoSuggestions = (params = {}) =>
+  http.get(`${base}/suggestions`, { params }).then((r) => r.data);
 
 /* -------------------- PURCHASE RECEIPTS -------------------- */
 

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/project/NEW IDEALS/pos/frontenda/src/styles/**)",
+      "Read(//c/project/NEW IDEALS/pos/frontenda/src/**)",
+      "Read(//c/project/NEW IDEALS/pos/frontenda/**)"
+    ]
+  }
+}
